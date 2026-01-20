@@ -1,0 +1,4 @@
+# This folder will contain:
+# - node/ (Node.js portable)
+# - server/ (Mediasoup server dist + node_modules)
+# These are added during CI build
