@@ -1,104 +1,119 @@
 import os from 'os';
-import type { WorkerSettings, RouterOptions, WebRtcTransportOptions } from 'mediasoup/node/lib/types.js';
+import type {
+  WorkerSettings,
+  RouterOptions,
+  WebRtcTransportOptions
+} from 'mediasoup/node/lib/types.js';
 
-// Tối ưu cho chất lượng cao - sử dụng nhiều workers hơn
-const numWorkers = Math.min(os.cpus().length, 4); // Tăng lên 4 workers cho chất lượng cao
+// =============================
+// Workers
+// =============================
+const numWorkers = Math.min(os.cpus().length, 3);
+// LAN không cần nhiều worker, ưu tiên ổn định
 
 export const config = {
-  // Server settings
   listenPort: 3016,
-  
-  // Mediasoup Worker settings - tối ưu cho chất lượng cao
+
+  numWorkers,
+
+  // =============================
+  // Worker
+  // =============================
   worker: {
     rtcMinPort: 40000,
-    rtcMaxPort: 49999, // Mở rộng port range cho nhiều kết nối
+    rtcMaxPort: 45000,
     logLevel: 'warn',
-    logTags: ['info', 'ice', 'dtls', 'rtp', 'srtp', 'rtcp'],
+    logTags: ['ice', 'dtls', 'rtp', 'rtcp'],
   } as WorkerSettings,
-  
-  numWorkers,
-  
-  // Router settings với codecs chất lượng cao
+
+  // =============================
+  // Router – Codec LAN CHUẨN
+  // =============================
   router: {
     mediaCodecs: [
+      // -------- AUDIO --------
       {
         kind: 'audio',
         mimeType: 'audio/opus',
         clockRate: 48000,
         channels: 2,
         parameters: {
-          'sprop-stereo': 1,
-          'useinbandfec': 1, // Forward Error Correction
-          'minptime': 10, // Minimum packet time
-          'maxplaybackrate': 48000, // Maximum playback rate
+          'useinbandfec': 1,
+          'minptime': 10,
         },
       },
-      {
-        kind: 'video',
-        mimeType: 'video/VP9', // VP9 cho chất lượng cao hơn VP8
-        clockRate: 90000,
-        parameters: {
-          'x-google-start-bitrate': 2500000, // Start bitrate cao cho chất lượng tốt
-          'x-google-min-bitrate': 1000000, // Min bitrate để đảm bảo chất lượng
-          'x-google-max-bitrate': 10000000, // Max bitrate cho 4K
-        },
-      },
+
+      // -------- VIDEO (CHÍNH) --------
       {
         kind: 'video',
         mimeType: 'video/H264',
         clockRate: 90000,
         parameters: {
           'packetization-mode': 1,
-          'profile-level-id': '640032', // High profile level 4.0 - chất lượng cao nhất
+          // H264 Baseline – tương thích tối đa, encode nhẹ
+          'profile-level-id': '42e01f',
           'level-asymmetry-allowed': 1,
-          'x-google-start-bitrate': 2500000, // Start bitrate cao
-          'x-google-min-bitrate': 1000000, // Min bitrate
-          'x-google-max-bitrate': 10000000, // Max bitrate cho 4K
+
+          // Bitrate THỰC TẾ cho LAN
+          'x-google-start-bitrate': 3000, // kbps
+          'x-google-max-bitrate': 5000,
         },
       },
+
+      // -------- VIDEO (FALLBACK) --------
       {
         kind: 'video',
-        mimeType: 'video/VP8', // Giữ VP8 làm fallback
+        mimeType: 'video/VP8',
         clockRate: 90000,
         parameters: {
-          'x-google-start-bitrate': 2000000, // Start bitrate cao
-          'x-google-min-bitrate': 800000,
-          'x-google-max-bitrate': 8000000,
+          'x-google-start-bitrate': 2500,
+          'x-google-max-bitrate': 4000,
         },
       },
     ],
   } as RouterOptions,
-  
-  // WebRTC Transport settings - tối ưu cho chất lượng cao
+
+  // =============================
+  // WebRTC Transport
+  // =============================
   webRtcTransport: {
     listenInfos: [
-      { 
-        protocol: 'udp' as const,
-        ip: '0.0.0.0', 
-        announcedAddress: undefined // Sẽ detect IP tự động
+      {
+        protocol: 'udp',
+        ip: '0.0.0.0',
+        announcedAddress: undefined, // LAN auto detect
       },
       {
-        protocol: 'tcp' as const,
+        protocol: 'tcp',
         ip: '0.0.0.0',
-        announcedAddress: undefined
-      }
+        announcedAddress: undefined,
+      },
     ],
     enableUdp: true,
     enableTcp: true,
     preferUdp: true,
-    initialAvailableOutgoingBitrate: 10000000, // 10Mbps start - cao hơn nhiều
-  },
-  
-  maxIncomingBitrate: 10000000, // Max 10Mbps incoming - hỗ trợ 4K
-  
-  // Tối ưu cho 30-50 clients
+
+    // Quan trọng: KHÔNG để quá cao
+    initialAvailableOutgoingBitrate: 6000000, // 6 Mbps
+  } as WebRtcTransportOptions,
+
+  // =============================
+  // Bitrate Control (CỰC KỲ QUAN TRỌNG)
+  // =============================
+  maxIncomingBitrate: 6000000, // 6 Mbps / producer
+
+  // =============================
+  // Room constraints
+  // =============================
   maxClientsPerRoom: 50,
-  
-  // Video constraints cho teacher - hỗ trợ 4K và 60fps
+
+  // =============================
+  // Capture hint cho Teacher
+  // =============================
   videoConstraints: {
-    width: { ideal: 3840, max: 3840 }, // 4K UHD
-    height: { ideal: 2160, max: 2160 }, // 4K UHD
-    frameRate: { ideal: 60, max: 60 }, // 60fps cho mượt mà
+    width: { ideal: 1920, max: 1920 },
+    height: { ideal: 1080, max: 1080 },
+    frameRate: { ideal: 30, max: 30 },
   },
 };
 

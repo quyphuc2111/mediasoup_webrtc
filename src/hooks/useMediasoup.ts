@@ -14,7 +14,7 @@ export function useMediasoup() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  
+
   const clientRef = useRef<MediasoupClient | null>(null);
 
   useEffect(() => {
@@ -30,7 +30,7 @@ export function useMediasoup() {
     isTeacher: boolean
   ) => {
     const peerId = crypto.randomUUID();
-    
+
     const client = new MediasoupClient({
       onConnectionStateChange: setConnectionState,
       onError: setError,
@@ -63,7 +63,7 @@ export function useMediasoup() {
 
     try {
       await client.connect(serverUrl, roomId, peerId, name, isTeacher);
-      
+
       // Students: create recv transport and consume existing producers
       if (!isTeacher) {
         try {
@@ -86,9 +86,9 @@ export function useMediasoup() {
       // Get screen with system audio - chất lượng siêu nét 4K 60fps
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          width: { ideal: 3840, max: 3840 }, // 4K UHD
-          height: { ideal: 2160, max: 2160 }, // 4K UHD
-          frameRate: { ideal: 60, max: 60 }, // 60fps cho mượt mà
+          width: { ideal: 1920, max: 1920 }, // 1080p Full HD
+          height: { ideal: 1080, max: 1080 }, // 1080p Full HD
+          frameRate: { ideal: 30, max: 60 }, // 30fps để tiết kiệm băng thông
         },
         audio: withAudio,
       });

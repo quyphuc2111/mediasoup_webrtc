@@ -20,15 +20,15 @@ export class MediasoupManager {
 
   async init(): Promise<void> {
     console.log(`Creating ${config.numWorkers} mediasoup workers...`);
-    
+
     for (let i = 0; i < config.numWorkers; i++) {
       const worker = await mediasoup.createWorker(config.worker);
-      
+
       worker.on('died', () => {
         console.error(`Worker ${i} died, exiting...`);
         process.exit(1);
       });
-      
+
       this.workers.push(worker);
       console.log(`Worker ${i} created [pid: ${worker.pid}]`);
     }
@@ -79,7 +79,7 @@ export class MediasoupManager {
     };
   }> {
     const localIp = getLocalIp();
-    
+
     const transportOptions = {
       listenInfos: [
         {
@@ -128,7 +128,7 @@ export class MediasoupManager {
     rtpParameters: RtpParameters
   ): Promise<Producer> {
     const producer = await transport.produce({ kind, rtpParameters });
-    
+
     producer.on('transportclose', () => {
       console.log(`Producer ${producer.id} transport closed`);
     });
@@ -152,6 +152,17 @@ export class MediasoupManager {
       rtpCapabilities,
       paused: true, // Start paused, resume after client ready
     });
+
+    // Tối ưu cho LAN: Giới hạn bitrate mỗi consumer ngay lập tức
+    // Chỉ nhận layer thấp nhất (vì ta tắt simulcast ở producer, nên thực ra chỉ có 1 layer)
+    // Nhưng vẫn set để đảm bảo mediasoup không cố gắng switch layer ảo
+    if (consumer.type !== 'simple') {
+      try {
+        await consumer.setPreferredLayers({ spatialLayer: 0, temporalLayer: 0 });
+      } catch (error) {
+        console.warn('Set preferred layers failed:', error);
+      }
+    }
 
     consumer.on('transportclose', () => {
       console.log(`Consumer ${consumer.id} transport closed`);

@@ -28,7 +28,7 @@ export class MediasoupClient {
   private consumers: Map<string, Consumer> = new Map();
   private events: Partial<MediasoupClientEvents> = {};
   private pendingRequests: Map<string, { resolve: (value: any) => void; reject: (reason: any) => void }> = new Map();
-  
+
   public roomId: string = '';
   public peerId: string = '';
   public isTeacher: boolean = false;
@@ -58,10 +58,10 @@ export class MediasoupClient {
         try {
           // Join room - response contains rtpCapabilities
           const joinResponse = await this.sendRequest('join', { roomId, peerId, name, isTeacher });
-          
+
           // Store rtpCapabilities from response
           this.rtpCapabilities = joinResponse.rtpCapabilities;
-          
+
           if (!this.rtpCapabilities) {
             throw new Error('Server không trả về rtpCapabilities');
           }
@@ -69,7 +69,7 @@ export class MediasoupClient {
           // Load device with rtpCapabilities
           this.device = new Device();
           await this.device.load({ routerRtpCapabilities: this.rtpCapabilities });
-          
+
           this.events.onConnectionStateChange?.('connected');
           resolve();
         } catch (error) {
@@ -226,25 +226,15 @@ export class MediasoupClient {
       const producer = await this.sendTransport!.produce({
         track: videoTrack,
         encodings: [
-          { 
-            maxBitrate: 2000000, 
-            scaleResolutionDownBy: 4,
-            maxFramerate: 30 
-          },   // Low ~480p - 2Mbps
-          { 
-            maxBitrate: 5000000, 
-            scaleResolutionDownBy: 2,
-            maxFramerate: 60 
-          },  // Medium ~1080p - 5Mbps
-          { 
-            maxBitrate: 10000000,
-            maxFramerate: 60 
-          },  // High 4K - 10Mbps
+          {
+            maxBitrate: 5000000, // Max 5Mbps cho LAN
+            maxFramerate: 30
+          },
         ],
         codecOptions: {
-          videoGoogleStartBitrate: 5000, // 5Mbps start bitrate
-          videoGoogleMinBitrate: 2000, // 2Mbps min để đảm bảo chất lượng
-          videoGoogleMaxBitrate: 10000, // 10Mbps max cho 4K
+          videoGoogleStartBitrate: 3000, // 3Mbps start
+          videoGoogleMinBitrate: 1000, // 1Mbps min
+          videoGoogleMaxBitrate: 5000, // 5Mbps max
         },
       });
       this.producers.set(producer.id, producer);
