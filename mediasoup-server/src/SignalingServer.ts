@@ -34,11 +34,33 @@ export class SignalingServer {
       
       ws.on('message', async (data) => {
         try {
-          const message: SignalingMessage = JSON.parse(data.toString());
+          let message: SignalingMessage;
+          try {
+            message = JSON.parse(data.toString());
+          } catch (parseError) {
+            console.error('JSON parse error:', parseError);
+            this.send(ws, { type: 'error', data: { message: 'Invalid JSON format' } });
+            return;
+          }
+
+          // Validate message structure
+          if (!message || typeof message !== 'object') {
+            console.error('Invalid message: not an object', message);
+            this.send(ws, { type: 'error', data: { message: 'Message must be an object' } });
+            return;
+          }
+
+          if (!message.type || typeof message.type !== 'string') {
+            console.error('Invalid message: missing or invalid type', message);
+            this.send(ws, { type: 'error', data: { message: 'Message must have a valid type field' } });
+            return;
+          }
+
           await this.handleMessage(ws, message);
         } catch (error) {
           console.error('Error handling message:', error);
-          this.send(ws, { type: 'error', data: { message: 'Invalid message' } });
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+          this.send(ws, { type: 'error', data: { message: errorMessage } });
         }
       });
 
@@ -98,11 +120,22 @@ export class SignalingServer {
         break;
       default:
         console.warn('Unknown message type:', type);
+        this.send(ws, { type: 'error', data: { message: `Unknown message type: ${type}` } });
     }
   }
 
   private async handleJoin(ws: WebSocket, data: { roomId: string; peerId: string; name: string; isTeacher: boolean }): Promise<void> {
+    if (!data || typeof data !== 'object') {
+      this.send(ws, { type: 'error', data: { message: 'Join data is required' } });
+      return;
+    }
+
     const { roomId, peerId, name, isTeacher } = data;
+    
+    if (!roomId || !peerId || !name || typeof isTeacher !== 'boolean') {
+      this.send(ws, { type: 'error', data: { message: 'Missing required fields: roomId, peerId, name, isTeacher' } });
+      return;
+    }
     
     const room = await this.manager.getOrCreateRoom(roomId);
     
@@ -143,10 +176,16 @@ export class SignalingServer {
 
   private async handleGetRouterRtpCapabilities(ws: WebSocket): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     this.send(ws, {
       type: 'routerRtpCapabilities',
@@ -156,13 +195,27 @@ export class SignalingServer {
 
   private async handleCreateTransport(ws: WebSocket, data: { direction: 'send' | 'recv' }): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
+
+    if (!data || !data.direction || (data.direction !== 'send' && data.direction !== 'recv')) {
+      this.send(ws, { type: 'error', data: { message: 'Invalid direction. Must be "send" or "recv"' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     const peer = room.getPeer(info.peerId);
-    if (!peer) return;
+    if (!peer) {
+      this.send(ws, { type: 'error', data: { message: 'Peer not found in room' } });
+      return;
+    }
 
     const { transport, params } = await this.manager.createWebRtcTransport(room);
 
@@ -180,16 +233,38 @@ export class SignalingServer {
 
   private async handleConnectTransport(ws: WebSocket, data: { direction: 'send' | 'recv'; dtlsParameters: DtlsParameters }): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
+
+    if (!data || !data.direction || (data.direction !== 'send' && data.direction !== 'recv')) {
+      this.send(ws, { type: 'error', data: { message: 'Invalid direction. Must be "send" or "recv"' } });
+      return;
+    }
+
+    if (!data.dtlsParameters) {
+      this.send(ws, { type: 'error', data: { message: 'dtlsParameters is required' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     const peer = room.getPeer(info.peerId);
-    if (!peer) return;
+    if (!peer) {
+      this.send(ws, { type: 'error', data: { message: 'Peer not found in room' } });
+      return;
+    }
 
     const transport = data.direction === 'send' ? peer.transport : peer.recvTransport;
-    if (!transport) return;
+    if (!transport) {
+      this.send(ws, { type: 'error', data: { message: `Transport not created for ${data.direction} direction` } });
+      return;
+    }
 
     await this.manager.connectTransport(transport, data.dtlsParameters);
 
@@ -198,13 +273,32 @@ export class SignalingServer {
 
   private async handleProduce(ws: WebSocket, data: { kind: MediaKind; rtpParameters: RtpParameters }): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
+
+    if (!data || !data.kind || !data.rtpParameters) {
+      this.send(ws, { type: 'error', data: { message: 'Missing required fields: kind, rtpParameters' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     const peer = room.getPeer(info.peerId);
-    if (!peer || !peer.transport) return;
+    if (!peer) {
+      this.send(ws, { type: 'error', data: { message: 'Peer not found in room' } });
+      return;
+    }
+
+    if (!peer.transport) {
+      this.send(ws, { type: 'error', data: { message: 'Send transport not created' } });
+      return;
+    }
 
     // Only teacher can produce
     if (!peer.isTeacher) {
@@ -231,13 +325,32 @@ export class SignalingServer {
 
   private async handleConsume(ws: WebSocket, data: { producerId: string; rtpCapabilities: RtpCapabilities }): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
+
+    if (!data || !data.producerId || !data.rtpCapabilities) {
+      this.send(ws, { type: 'error', data: { message: 'Missing required fields: producerId, rtpCapabilities' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     const peer = room.getPeer(info.peerId);
-    if (!peer || !peer.recvTransport) return;
+    if (!peer) {
+      this.send(ws, { type: 'error', data: { message: 'Peer not found in room' } });
+      return;
+    }
+
+    if (!peer.recvTransport) {
+      this.send(ws, { type: 'error', data: { message: 'Receive transport not created' } });
+      return;
+    }
 
     // Find producer (from teacher)
     let producer = null;
@@ -280,16 +393,33 @@ export class SignalingServer {
 
   private async handleResumeConsumer(ws: WebSocket, data: { consumerId: string }): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
+
+    if (!data || !data.consumerId) {
+      this.send(ws, { type: 'error', data: { message: 'Missing required field: consumerId' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     const peer = room.getPeer(info.peerId);
-    if (!peer) return;
+    if (!peer) {
+      this.send(ws, { type: 'error', data: { message: 'Peer not found in room' } });
+      return;
+    }
 
     const consumer = peer.consumers.get(data.consumerId);
-    if (!consumer) return;
+    if (!consumer) {
+      this.send(ws, { type: 'error', data: { message: 'Consumer not found' } });
+      return;
+    }
 
     await consumer.resume();
     this.send(ws, { type: 'consumerResumed', data: { consumerId: data.consumerId } });
@@ -297,10 +427,16 @@ export class SignalingServer {
 
   private async handleGetProducers(ws: WebSocket): Promise<void> {
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      this.send(ws, { type: 'error', data: { message: 'Not joined to a room' } });
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      this.send(ws, { type: 'error', data: { message: 'Room not found' } });
+      return;
+    }
 
     const producers = room.teacherProducers.map(p => ({
       producerId: p.id,
