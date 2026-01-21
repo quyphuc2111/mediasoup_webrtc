@@ -230,6 +230,13 @@ export class MediasoupClient {
     // Produce video track với chất lượng siêu nét
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
+      console.log('[MediasoupClient] Producing video track:', {
+        id: videoTrack.id,
+        label: videoTrack.label,
+        enabled: videoTrack.enabled,
+        settings: videoTrack.getSettings(),
+      });
+      
       const producer = await this.sendTransport!.produce({
         track: videoTrack,
         encodings: [
@@ -245,15 +252,58 @@ export class MediasoupClient {
         },
       });
       this.producers.set(producer.id, producer);
+      console.log('[MediasoupClient] ✅ Video producer created:', producer.id);
+    } else {
+      console.warn('[MediasoupClient] ⚠️ No video track found in stream');
     }
 
     // Produce audio track (system audio)
-    const audioTrack = stream.getAudioTracks()[0];
-    if (audioTrack) {
-      const producer = await this.sendTransport!.produce({
-        track: audioTrack,
+    const audioTracks = stream.getAudioTracks();
+    console.log('[MediasoupClient] Audio tracks in stream:', audioTracks.length);
+    
+    if (audioTracks.length > 0) {
+      const audioTrack = audioTracks[0];
+      console.log('[MediasoupClient] Producing audio track:', {
+        id: audioTrack.id,
+        label: audioTrack.label,
+        enabled: audioTrack.enabled,
+        muted: audioTrack.muted,
+        readyState: audioTrack.readyState,
+        settings: audioTrack.getSettings(),
       });
-      this.producers.set(producer.id, producer);
+
+      // Kiểm tra xem track có đang active không
+      if (audioTrack.readyState === 'ended') {
+        console.error('[MediasoupClient] ❌ Audio track đã bị ended, không thể produce');
+        return;
+      }
+
+      // Đảm bảo track được enable
+      if (!audioTrack.enabled) {
+        console.warn('[MediasoupClient] ⚠️ Audio track bị disabled, đang enable...');
+        audioTrack.enabled = true;
+      }
+
+      try {
+        const producer = await this.sendTransport!.produce({
+          track: audioTrack,
+          // Thêm codec options cho audio nếu cần
+          codecOptions: {
+            opusStereo: true,
+            opusFec: true,
+            opusDtx: true,
+            opusMaxPlaybackRate: 48000,
+          },
+        });
+        this.producers.set(producer.id, producer);
+        console.log('[MediasoupClient] ✅ Audio producer created:', producer.id, 'kind:', producer.kind);
+      } catch (error) {
+        console.error('[MediasoupClient] ❌ Failed to produce audio track:', error);
+        throw error;
+      }
+    } else {
+      console.warn('[MediasoupClient] ⚠️ No audio track found in stream. System audio có thể chưa được capture.');
+      console.warn('[MediasoupClient] Hướng dẫn: Đảm bảo đã chọn "Share system audio" trong hộp thoại chia sẻ màn hình.');
     }
   }
 

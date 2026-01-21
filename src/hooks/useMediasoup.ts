@@ -237,14 +237,52 @@ export function useMediasoup() {
       const mediaDevices = nav.mediaDevices;
 
       // Get screen with system audio - chất lượng siêu nét 4K 60fps
-      const screenStream = await mediaDevices.getDisplayMedia({
+      const displayMediaOptions: any = {
         video: {
           width: { ideal: 1920, max: 1920 }, // 1080p Full HD
           height: { ideal: 1080, max: 1080 }, // 1080p Full HD
           frameRate: { ideal: 30, max: 60 }, // 30fps để tiết kiệm băng thông
         },
-        audio: withAudio,
-      });
+      };
+
+      // Cải thiện audio capture cho system audio
+      if (withAudio) {
+        displayMediaOptions.audio = {
+          echoCancellation: false, // Tắt echo cancellation cho system audio
+          noiseSuppression: false, // Tắt noise suppression cho system audio
+          autoGainControl: false, // Tắt auto gain control cho system audio
+          suppressLocalAudioPlayback: false, // Không suppress local audio
+          // Thử các constraints khác để capture system audio tốt hơn
+          sampleRate: { ideal: 48000 },
+          channelCount: { ideal: 2 }, // Stereo
+        };
+      }
+
+      console.log('[ScreenShare] Requesting display media with options:', displayMediaOptions);
+      const screenStream = await mediaDevices.getDisplayMedia(displayMediaOptions);
+
+      // Log thông tin về tracks được capture
+      const videoTracks = screenStream.getVideoTracks();
+      const audioTracks = screenStream.getAudioTracks();
+      console.log('[ScreenShare] Video tracks:', videoTracks.length);
+      console.log('[ScreenShare] Audio tracks:', audioTracks.length);
+      
+      if (withAudio && audioTracks.length === 0) {
+        console.warn('[ScreenShare] ⚠️ Audio track không được capture! Có thể do:');
+        console.warn('  - macOS chưa cấp quyền Screen Recording');
+        console.warn('  - Trình duyệt/WebView không hỗ trợ system audio capture');
+        console.warn('  - Người dùng chưa chọn "Share system audio" trong dialog');
+        setError('⚠️ Âm thanh hệ thống không được capture. Vui lòng đảm bảo đã chọn "Share system audio" trong hộp thoại chia sẻ màn hình.');
+      } else if (audioTracks.length > 0) {
+        console.log('[ScreenShare] ✅ Audio track được capture:', {
+          id: audioTracks[0].id,
+          label: audioTracks[0].label,
+          enabled: audioTracks[0].enabled,
+          muted: audioTracks[0].muted,
+          readyState: audioTracks[0].readyState,
+          settings: audioTracks[0].getSettings(),
+        });
+      }
 
       setLocalStream(screenStream);
       await clientRef.current.produceScreen(screenStream);
