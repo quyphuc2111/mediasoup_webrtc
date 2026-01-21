@@ -10,7 +10,7 @@ import type {
   MediaKind,
   RtpParameters,
 } from 'mediasoup/node/lib/types.js';
-import { config, getLocalIp } from './config.js';
+import { config, getLocalIp } from './config.bk.js';
 import { Room } from './Room.js';
 
 export class MediasoupManager {
@@ -135,34 +135,34 @@ export class MediasoupManager {
         // dùng để debug nếu cần
         source: kind === 'video' ? 'screen' : 'microphone',
       },
+      
+      // encodings: [
+      //   {
+      //     maxBitrate: 12_000_000,
+      //     scalabilityMode: 'L1T3', // temporal only
+      //   },
+      // ],
+      // codecOptions: {
+      //   videoGoogleStartBitrate: 6000,
+      // },
     });
 
     // 🔒 LOCK encoder behavior (CỰC KỲ QUAN TRỌNG CHO WINDOWS)
-    // Ép CFR 30fps, không cho WebRTC Windows tự drop frame
-    // Bitrate không dao động → encode đều → mượt
+    // Screen share: L1T3 (1 spatial, 3 temporal layers) - KHÔNG simulcast
+    // Đảm bảo chỉ dùng temporal scalability, không cho WebRTC tự adapt spatial layers
     if (kind === 'video') {
       try {
-        // Set max spatial layer to disable simulcast
+        // Set max spatial layer to 0 để disable simulcast
+        // Screen share dùng L1T3 (temporal only), không cần multiple spatial layers
         if ('setMaxSpatialLayer' in producer && typeof producer.setMaxSpatialLayer === 'function') {
           await (producer as any).setMaxSpatialLayer(0);
+          console.log(`Producer ${producer.id}: Locked to spatial layer 0 (no simulcast)`);
         }
 
-        // Lock bitrate và framerate để tránh Windows WebRTC tự scale
-        // Note: setRtpEncodingParameters might not be available in all mediasoup versions
-        // We configure these in rtpParameters when creating producer instead
-        if ('setRtpEncodingParameters' in producer && typeof producer.setRtpEncodingParameters === 'function') {
-          await (producer as any).setRtpEncodingParameters([
-            {
-              maxBitrate: 6_000_000,
-              minBitrate: 3_000_000,
-              maxFramerate: 30,
-              priority: 'high',
-            },
-          ]);
-          console.log(`Producer ${producer.id}: Locked encoding parameters (6Mbps, 30fps)`);
-        } else {
-          console.log(`Producer ${producer.id}: Created (encoding parameters set in rtpParameters)`);
-        }
+        // Note: Encodings (L1T3, bitrate) được set ở client trong transport.produce()
+        // Server chỉ cần đảm bảo không có spatial layer switching
+        // Temporal layers (L1T3) cho phép framerate adaptation tự nhiên
+        console.log(`Producer ${producer.id}: Created with encodings from client (L1T3 for screen share)`);
       } catch (error) {
         console.warn(`Failed to lock producer encoding parameters:`, error);
       }

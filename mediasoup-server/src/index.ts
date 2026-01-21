@@ -1,6 +1,6 @@
 import { MediasoupManager } from './MediasoupManager.js';
 import { SignalingServer } from './SignalingServer.js';
-import { config, getLocalIp } from './config.js';
+import { config, getLocalIp } from './config.bk.js';
 
 async function main() {
   console.log('='.repeat(50));

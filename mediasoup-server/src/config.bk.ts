@@ -8,11 +8,12 @@ import type {
 // =============================
 // Workers
 // =============================
-// LAN + mediasoup: 2–3 worker là đẹp
 const numWorkers = Math.min(os.cpus().length, 3);
+// LAN không cần nhiều worker, ưu tiên ổn định
 
 export const config = {
   listenPort: 3016,
+
   numWorkers,
 
   // =============================
@@ -22,11 +23,11 @@ export const config = {
     rtcMinPort: 40000,
     rtcMaxPort: 45000,
     logLevel: 'warn',
-    logTags: ['ice', 'dtls'],
+    logTags: ['ice', 'dtls', 'rtp', 'rtcp'],
   } as WorkerSettings,
 
   // =============================
-  // Router – Codec CÂN BẰNG
+  // Router – Codec LAN CHUẨN
   // =============================
   router: {
     mediaCodecs: [
@@ -37,40 +38,37 @@ export const config = {
         clockRate: 48000,
         channels: 2,
         parameters: {
-          useinbandfec: 1,
-          minptime: 10,
+          'useinbandfec': 1,
+          'minptime': 10,
         },
       },
 
-      // -------- VIDEO SCREEN (ƯU TIÊN TEXT) --------
-      // VP9 cho screen share (code, UI)
-      {
-        kind: 'video',
-        mimeType: 'video/VP9',
-        clockRate: 90000,
-        parameters: {
-          'x-google-start-bitrate': 6000,
-        },
-      },
-
-      // -------- VIDEO CAMERA (PHỔ BIẾN) --------
-      // H264 cho webcam – nhẹ CPU, tương thích tốt
+      // -------- VIDEO (CHÍNH) --------
       {
         kind: 'video',
         mimeType: 'video/H264',
         clockRate: 90000,
         parameters: {
           'packetization-mode': 1,
-          'profile-level-id': '42e01f', // baseline
+          // H264 Baseline – tương thích tối đa, encode nhẹ
+          'profile-level-id': '42e01f',
           'level-asymmetry-allowed': 1,
+
+          // Bitrate THỰC TẾ cho LAN
+          'x-google-start-bitrate': 3000, // kbps
+          'x-google-max-bitrate': 5000,
         },
       },
 
-      // -------- FALLBACK --------
+      // -------- VIDEO (FALLBACK) --------
       {
         kind: 'video',
         mimeType: 'video/VP8',
         clockRate: 90000,
+        parameters: {
+          'x-google-start-bitrate': 2500,
+          'x-google-max-bitrate': 4000,
+        },
       },
     ],
   } as RouterOptions,
@@ -83,7 +81,7 @@ export const config = {
       {
         protocol: 'udp',
         ip: '0.0.0.0',
-        announcedAddress: undefined,
+        announcedAddress: undefined, // LAN auto detect
       },
       {
         protocol: 'tcp',
@@ -95,15 +93,14 @@ export const config = {
     enableTcp: true,
     preferUdp: true,
 
-    // LAN + screen share: đừng tiếc bitrate
-    initialAvailableOutgoingBitrate: 15_000_000, // 15 Mbps
+    // Quan trọng: KHÔNG để quá cao
+    initialAvailableOutgoingBitrate: 6000000, // 6 Mbps
   } as WebRtcTransportOptions,
 
   // =============================
-  // Bitrate Control
+  // Bitrate Control (CỰC KỲ QUAN TRỌNG)
   // =============================
-  // Áp cho producer (screen / camera)
-  maxIncomingBitrate: 15_000_000,
+  maxIncomingBitrate: 6000000, // 6 Mbps / producer
 
   // =============================
   // Room constraints
@@ -111,19 +108,16 @@ export const config = {
   maxClientsPerRoom: 50,
 
   // =============================
-  // Capture hint (SCREEN SHARE)
+  // Capture hint cho Teacher
   // =============================
-  // Quan trọng: fps thấp → chữ nét
   videoConstraints: {
-    width: { max: 1920 },
-    height: { max: 1080 },
-    frameRate: { max: 15 },
+    width: { ideal: 1920, max: 1920 },
+    height: { ideal: 1080, max: 1080 },
+    frameRate: { ideal: 30, max: 30 },
   },
 };
 
-// =============================
-// Detect local IP (LAN)
-// =============================
+// Detect local IP
 export function getLocalIp(): string {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {

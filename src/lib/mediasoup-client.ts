@@ -227,21 +227,20 @@ export class MediasoupClient {
       await this.createSendTransport();
     }
 
-    // Produce video track với chất lượng siêu nét
+    // 🔹 Screen share (KHÔNG simulcast) - Temporal scalability only (L1T3)
+    // L1T3 = 1 spatial layer, 3 temporal layers (base + 2 enhancement)
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
       const producer = await this.sendTransport!.produce({
         track: videoTrack,
         encodings: [
           {
-            maxBitrate: 5000000, // Max 5Mbps cho LAN
-            maxFramerate: 30
+            maxBitrate: 12_000_000, // 12Mbps max cho screen share chất lượng cao
+            scalabilityMode: 'L1T3', // temporal only - KHÔNG dùng simulcast
           },
         ],
         codecOptions: {
-          videoGoogleStartBitrate: 3000, // 3Mbps start
-          videoGoogleMinBitrate: 1000, // 1Mbps min
-          videoGoogleMaxBitrate: 5000, // 5Mbps max
+          videoGoogleStartBitrate: 6000, // 6Mbps start
         },
       });
       this.producers.set(producer.id, producer);
