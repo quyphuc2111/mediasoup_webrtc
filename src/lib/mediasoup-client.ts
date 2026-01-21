@@ -227,7 +227,14 @@ export class MediasoupClient {
       await this.createSendTransport();
     }
 
-    // Produce video track với chất lượng siêu nét
+    // 🔒 LOCK bitrate và framerate ở CLIENT (QUAN TRỌNG CHO WINDOWS)
+    // Mediasoup Producer KHÔNG có API để set bitrate/framerate ở server
+    // Tất cả encoding parameters phải được set ở đây khi gọi transport.produce()
+    //
+    // Windows encoder optimization:
+    // - 25fps mượt hơn 30fps (Chrome trên Windows)
+    // - 4.5Mbps max tránh encoder burst (NVENC/QSV ổn định hơn)
+    // - Bitrate range: 1.5-4Mbps để tránh oscillation
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
       const producer = await this.sendTransport!.produce({
@@ -245,6 +252,7 @@ export class MediasoupClient {
         },
       });
       this.producers.set(producer.id, producer);
+      console.log(`[MediasoupClient] Video producer created with encoding: 4.5Mbps @ 25fps (Windows optimized)`);
     }
 
     // Produce audio track (system audio)
@@ -326,13 +334,32 @@ export class MediasoupClient {
       return null;
     }
 
+    // Ensure device has rtpCapabilities loaded
+    if (!this.device.rtpCapabilities) {
+      console.error('[MediasoupClient] Device rtpCapabilities not loaded, cannot consume');
+      return null;
+    }
+
     try {
       console.log(`[MediasoupClient] Consuming producer ${producerId}...`);
-      const params = await this.sendRequest('consume', {
-        producerId,
-        rtpCapabilities: this.device.rtpCapabilities,
+      console.log(`[MediasoupClient] Sending rtpCapabilities:`, {
+        codecs: this.device.rtpCapabilities.codecs?.length || 0,
+        headerExtensions: this.device.rtpCapabilities.headerExtensions?.length || 0,
       });
 
+      // 1. Gửi request lên server để lấy consumer params
+      const params = await this.sendRequest('consume', {
+        producerId,
+        rtpCapabilities: this.device.rtpCapabilities, // Cần thiết để server biết client hỗ trợ gì
+      });
+
+      console.log(`[MediasoupClient] Received consumer params:`, {
+        consumerId: params.consumerId,
+        producerId: params.producerId,
+        kind: params.kind,
+      });
+
+      // 2. Tạo consumer phía client
       const consumer = await this.recvTransport.consume({
         id: params.consumerId,
         producerId: params.producerId,
@@ -341,13 +368,24 @@ export class MediasoupClient {
       });
 
       this.consumers.set(consumer.id, consumer);
+      console.log(`[MediasoupClient] Consumer created: ${consumer.id}, kind: ${consumer.kind}, paused: ${consumer.paused}`);
 
-      // Resume consumer
+      // 3. THÔNG BÁO CHO SERVER RESUME
+      // Rất quan trọng vì server đang ở trạng thái paused để đợi client sẵn sàng
       await this.sendRequest('resumeConsumer', { consumerId: consumer.id });
+      console.log(`[MediasoupClient] ✅ Consumer ${consumer.id} resumed`);
+
+      // 4. Track sẵn sàng để play
+      console.log(`[MediasoupClient] Track ready:`, {
+        id: consumer.track.id,
+        kind: consumer.track.kind,
+        enabled: consumer.track.enabled,
+        readyState: consumer.track.readyState,
+      });
 
       return consumer;
     } catch (error) {
-      console.error('Failed to consume:', error);
+      console.error(`[MediasoupClient] ❌ Failed to consume producer ${producerId}:`, error);
       return null;
     }
   }

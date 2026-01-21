@@ -49,9 +49,13 @@ export const config = {
         mimeType: 'video/H264',
         clockRate: 90000,
         parameters: {
+          // 👉 packetization-mode: 1 là lựa chọn chính xác nhất cho Windows
+          // Mode 1 = Non-interleaved mode (tốt cho real-time, ít latency)
           'packetization-mode': 1,
+          
           // 👉 Windows-friendly: Main Profile Level 3.2 (NVENC/QSV encode ổn hơn)
-          'profile-level-id': '4d0032', // Main Profile Level 3.2 (thay vì Baseline 42e01f)
+          // 4d0032 = Main Profile Level 3.2 (thay vì Baseline 42e01f)
+          'profile-level-id': '4d0032',
           'level-asymmetry-allowed': 1,
 
           // Chrome / Edge tuning cho Windows - giảm peak bitrate để tránh encoder drop frame

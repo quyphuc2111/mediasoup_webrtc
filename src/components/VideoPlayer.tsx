@@ -11,9 +11,33 @@ export function VideoPlayer({ stream, muted = false, className = '', label }: Vi
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (stream) {
+      console.log(`[VideoPlayer] Setting stream with ${stream.getTracks().length} tracks:`, 
+        stream.getTracks().map(t => `${t.kind} (${t.id})`));
+      
+      video.srcObject = stream;
+      
+      // Đảm bảo video play (quan trọng cho Student)
+      video.play().catch((error) => {
+        console.warn('[VideoPlayer] Auto-play prevented, user interaction required:', error);
+      });
+    } else {
+      video.srcObject = null;
     }
+
+    // Cleanup
+    return () => {
+      if (video.srcObject) {
+        const tracks = (video.srcObject as MediaStream).getTracks();
+        tracks.forEach(track => {
+          // Don't stop tracks here - let useMediasoup handle cleanup
+          console.log(`[VideoPlayer] Track ${track.id} still active`);
+        });
+      }
+    };
   }, [stream]);
 
   return (
