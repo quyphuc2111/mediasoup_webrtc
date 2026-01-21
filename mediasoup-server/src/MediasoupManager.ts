@@ -153,13 +153,13 @@ export class MediasoupManager {
         if ('setRtpEncodingParameters' in producer && typeof producer.setRtpEncodingParameters === 'function') {
           await (producer as any).setRtpEncodingParameters([
             {
-              maxBitrate: 6_000_000,
-              minBitrate: 3_000_000,
-              maxFramerate: 30,
+              maxBitrate: 4_500_000, // 4.5Mbps (giảm từ 6Mbps - Windows encoder ghét burst)
+              minBitrate: 2_500_000, // 2.5Mbps min
+              maxFramerate: 25, // 25fps ideal cho Windows
               priority: 'high',
             },
           ]);
-          console.log(`Producer ${producer.id}: Locked encoding parameters (6Mbps, 30fps)`);
+          console.log(`Producer ${producer.id}: Locked encoding parameters (4.5Mbps, 25fps) - Windows optimized`);
         } else {
           console.log(`Producer ${producer.id}: Created (encoding parameters set in rtpParameters)`);
         }
@@ -210,12 +210,12 @@ export class MediasoupManager {
       if ('setRtpEncodingParameters' in consumer && typeof consumer.setRtpEncodingParameters === 'function') {
         await (consumer as any).setRtpEncodingParameters([
           {
-            maxBitrate: 6_000_000,
-            minBitrate: 3_000_000,
+            maxBitrate: 4_500_000, // 4.5Mbps (match với producer - Windows optimized)
+            minBitrate: 2_500_000, // 2.5Mbps min
             priority: 'high',
           },
         ]);
-        console.log(`Consumer ${consumer.id}: Locked bitrate (6Mbps) and layers`);
+        console.log(`Consumer ${consumer.id}: Locked bitrate (4.5Mbps) and layers - Windows optimized`);
       } else {
         console.log(`Consumer ${consumer.id}: Created (bitrate limits set via transport)`);
       }

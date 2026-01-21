@@ -234,14 +234,14 @@ export class MediasoupClient {
         track: videoTrack,
         encodings: [
           {
-            maxBitrate: 5000000, // Max 5Mbps cho LAN
-            maxFramerate: 30
+            maxBitrate: 4500000, // 4.5Mbps max (tối ưu Windows - tránh encoder burst)
+            maxFramerate: 25, // 25fps ideal cho Windows (mượt hơn 30fps)
           },
         ],
         codecOptions: {
-          videoGoogleStartBitrate: 3000, // 3Mbps start
-          videoGoogleMinBitrate: 1000, // 1Mbps min
-          videoGoogleMaxBitrate: 5000, // 5Mbps max
+          videoGoogleStartBitrate: 2500, // 2.5Mbps start (match với config server)
+          videoGoogleMinBitrate: 1500, // 1.5Mbps min
+          videoGoogleMaxBitrate: 4000, // 4Mbps max (giảm từ 5Mbps)
         },
       });
       this.producers.set(producer.id, producer);

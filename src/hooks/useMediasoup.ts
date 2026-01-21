@@ -236,12 +236,14 @@ export function useMediasoup() {
       const nav = typeof navigator !== 'undefined' ? navigator : (window as any).navigator;
       const mediaDevices = nav.mediaDevices;
 
-      // Get screen with system audio - chất lượng siêu nét 4K 60fps
+      // Get screen with system audio - Tối ưu cho Windows
       const screenStream = await mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: 1920, max: 1920 }, // 1080p Full HD
           height: { ideal: 1080, max: 1080 }, // 1080p Full HD
-          frameRate: { ideal: 30, max: 60 }, // 30fps để tiết kiệm băng thông
+          // 👇 QUAN TRỌNG: Chrome trên Windows 25fps mượt hơn 30fps rất nhiều
+          // Mắt người không phân biệt rõ 25 vs 30, nhưng Windows encoder ổn định hơn ở 25fps
+          frameRate: { ideal: 25, max: 30 }, // 25fps ideal cho Windows
         },
         audio: withAudio,
       });

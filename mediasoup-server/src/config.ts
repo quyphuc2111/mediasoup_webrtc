@@ -17,13 +17,13 @@ export const config = {
   numWorkers,
 
   // =============================
-  // Worker
+  // Worker - Tối ưu cho Windows
   // =============================
   worker: {
     rtcMinPort: 40000,
     rtcMaxPort: 45000,
-    logLevel: 'warn',
-    logTags: ['ice', 'dtls', 'rtp', 'rtcp'],
+    logLevel: 'error', // 👈 Windows log nhiều gây jitter, chỉ log error
+    logTags: [], // Rỗng để giảm overhead logging
   } as WorkerSettings,
 
   // =============================
@@ -43,31 +43,33 @@ export const config = {
         },
       },
 
-      // -------- VIDEO (CHÍNH) --------
+      // -------- VIDEO (CHÍNH) - Tối ưu cho Windows --------
       {
         kind: 'video',
         mimeType: 'video/H264',
         clockRate: 90000,
         parameters: {
           'packetization-mode': 1,
-          // H264 Baseline – tương thích tối đa, encode nhẹ
-          'profile-level-id': '42e01f',
+          // 👉 Windows-friendly: Main Profile Level 3.2 (NVENC/QSV encode ổn hơn)
+          'profile-level-id': '4d0032', // Main Profile Level 3.2 (thay vì Baseline 42e01f)
           'level-asymmetry-allowed': 1,
 
-          // Bitrate THỰC TẾ cho LAN
-          'x-google-start-bitrate': 3000, // kbps
-          'x-google-max-bitrate': 5000,
+          // Chrome / Edge tuning cho Windows - giảm peak bitrate để tránh encoder drop frame
+          'x-google-start-bitrate': 2500, // kbps
+          'x-google-max-bitrate': 4000,
+          'x-google-min-bitrate': 1500,
         },
       },
 
-      // -------- VIDEO (FALLBACK) --------
+      // -------- VIDEO (FALLBACK) - VP8 cho Windows --------
       {
         kind: 'video',
         mimeType: 'video/VP8',
         clockRate: 90000,
         parameters: {
-          'x-google-start-bitrate': 2500,
-          'x-google-max-bitrate': 4000,
+          'x-google-start-bitrate': 2000, // Giảm cho Windows
+          'x-google-max-bitrate': 3500,
+          'x-google-min-bitrate': 1000,
         },
       },
     ],
@@ -93,14 +95,14 @@ export const config = {
     enableTcp: true,
     preferUdp: true,
 
-    // Quan trọng: KHÔNG để quá cao
-    initialAvailableOutgoingBitrate: 6000000, // 6 Mbps
+    // Tối ưu Windows: giảm từ 6 → 5 Mbps để tránh encoder burst
+    initialAvailableOutgoingBitrate: 5000000, // 5 Mbps (giảm từ 6Mbps cho Windows)
   } as WebRtcTransportOptions,
 
   // =============================
-  // Bitrate Control (CỰC KỲ QUAN TRỌNG)
+  // Bitrate Control - Tối ưu Windows (CỰC KỲ QUAN TRỌNG)
   // =============================
-  maxIncomingBitrate: 6000000, // 6 Mbps / producer
+  maxIncomingBitrate: 4500000, // 4.5 Mbps / producer (giảm từ 6Mbps - Windows encoder ghét burst)
 
   // =============================
   // Room constraints
@@ -108,12 +110,14 @@ export const config = {
   maxClientsPerRoom: 50,
 
   // =============================
-  // Capture hint cho Teacher
+  // Capture hint cho Teacher - Tối ưu Windows
   // =============================
   videoConstraints: {
     width: { ideal: 1920, max: 1920 },
     height: { ideal: 1080, max: 1080 },
-    frameRate: { ideal: 30, max: 30 },
+    // 👇 QUAN TRỌNG: Chrome trên Windows 25fps mượt hơn 30fps rất nhiều
+    // Mắt người không phân biệt rõ 25 vs 30, nhưng Windows encoder ổn định hơn ở 25fps
+    frameRate: { ideal: 25, max: 30 },
   },
 };
 
