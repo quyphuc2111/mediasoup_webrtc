@@ -138,3 +138,11 @@ npm run tauri build
 ### Client (Học sinh)
 - Browser: Chrome/Edge/Firefox (mới nhất)
 - Network: 2Mbps+ download
+
+## 💝 Sponsor / Ủng hộ dự án
+
+Nếu dự án này hữu ích cho bạn, vui lòng cân nhắc ⭐ **star** repository hoặc ủng hộ dự án qua [Sponsor](SPONSOR.md).
+
+## 📄 License
+
+MIT License - Xem file [LICENSE](LICENSE) để biết thêm chi tiết.
