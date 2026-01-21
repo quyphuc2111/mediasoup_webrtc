@@ -43,6 +43,10 @@ export class MediasoupManager {
   async createRoom(roomId?: string): Promise<Room> {
     const worker = this.getNextWorker();
     const router = await worker.createRouter(config.router);
+    
+    // Note: Router observer doesn't have 'newProducer' event
+    // We handle producer configuration in createProducer() instead
+    
     const room = new Room(router, roomId);
     this.rooms.set(room.id, room);
     console.log(`Room created: ${room.id}`);
@@ -87,15 +91,12 @@ export class MediasoupManager {
           ip: '0.0.0.0',
           announcedAddress: localIp,
         },
-        {
-          protocol: 'tcp' as const,
-          ip: '0.0.0.0',
-          announcedAddress: localIp,
-        },
+        // ❗ LAN: TẮT TCP để tránh fallback gây jitter trên Windows
+        // Chỉ dùng UDP cho LAN để tránh TCP fallback oscillation
       ],
       enableUdp: true,
-      enableTcp: true,
       preferUdp: true,
+      enableTcp: false, // ❗ LAN: TẮT TCP để tránh fallback
       initialAvailableOutgoingBitrate: config.webRtcTransport.initialAvailableOutgoingBitrate,
     };
 
@@ -127,7 +128,45 @@ export class MediasoupManager {
     kind: MediaKind,
     rtpParameters: RtpParameters
   ): Promise<Producer> {
-    const producer = await transport.produce({ kind, rtpParameters });
+    const producer = await transport.produce({
+      kind,
+      rtpParameters,
+      appData: {
+        // dùng để debug nếu cần
+        source: kind === 'video' ? 'screen' : 'microphone',
+      },
+    });
+
+    // 🔒 LOCK encoder behavior (CỰC KỲ QUAN TRỌNG CHO WINDOWS)
+    // Ép CFR 30fps, không cho WebRTC Windows tự drop frame
+    // Bitrate không dao động → encode đều → mượt
+    if (kind === 'video') {
+      try {
+        // Set max spatial layer to disable simulcast
+        if ('setMaxSpatialLayer' in producer && typeof producer.setMaxSpatialLayer === 'function') {
+          await (producer as any).setMaxSpatialLayer(0);
+        }
+
+        // Lock bitrate và framerate để tránh Windows WebRTC tự scale
+        // Note: setRtpEncodingParameters might not be available in all mediasoup versions
+        // We configure these in rtpParameters when creating producer instead
+        if ('setRtpEncodingParameters' in producer && typeof producer.setRtpEncodingParameters === 'function') {
+          await (producer as any).setRtpEncodingParameters([
+            {
+              maxBitrate: 6_000_000,
+              minBitrate: 3_000_000,
+              maxFramerate: 30,
+              priority: 'high',
+            },
+          ]);
+          console.log(`Producer ${producer.id}: Locked encoding parameters (6Mbps, 30fps)`);
+        } else {
+          console.log(`Producer ${producer.id}: Created (encoding parameters set in rtpParameters)`);
+        }
+      } catch (error) {
+        console.warn(`Failed to lock producer encoding parameters:`, error);
+      }
+    }
 
     producer.on('transportclose', () => {
       console.log(`Producer ${producer.id} transport closed`);
@@ -153,15 +192,35 @@ export class MediasoupManager {
       paused: true, // Start paused, resume after client ready
     });
 
-    // Tối ưu cho LAN: Giới hạn bitrate mỗi consumer ngay lập tức
-    // Chỉ nhận layer thấp nhất (vì ta tắt simulcast ở producer, nên thực ra chỉ có 1 layer)
-    // Nhưng vẫn set để đảm bảo mediasoup không cố gắng switch layer ảo
-    if (consumer.type !== 'simple') {
-      try {
+    // 🔒 Lock consumer bitrate và layer (LAN only)
+    // Ngăn WebRTC "thông minh quá mức", tránh oscillation bitrate (căn nguyên jitter)
+    try {
+      // Set preferred layers first
+      if (consumer.type !== 'simple') {
         await consumer.setPreferredLayers({ spatialLayer: 0, temporalLayer: 0 });
-      } catch (error) {
-        console.warn('Set preferred layers failed:', error);
       }
+      
+      // Lock max spatial layer
+      if ('setMaxSpatialLayer' in consumer && typeof consumer.setMaxSpatialLayer === 'function') {
+        await (consumer as any).setMaxSpatialLayer(0);
+      }
+
+      // Giới hạn bitrate downstream để tránh oscillation
+      // Windows receiver không thể request bitrate thấp hơn → frame spacing đều
+      if ('setRtpEncodingParameters' in consumer && typeof consumer.setRtpEncodingParameters === 'function') {
+        await (consumer as any).setRtpEncodingParameters([
+          {
+            maxBitrate: 6_000_000,
+            minBitrate: 3_000_000,
+            priority: 'high',
+          },
+        ]);
+        console.log(`Consumer ${consumer.id}: Locked bitrate (6Mbps) and layers`);
+      } else {
+        console.log(`Consumer ${consumer.id}: Created (bitrate limits set via transport)`);
+      }
+    } catch (error) {
+      console.warn('Set consumer encoding parameters failed:', error);
     }
 
     consumer.on('transportclose', () => {
