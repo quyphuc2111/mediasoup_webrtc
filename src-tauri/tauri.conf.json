@@ -36,6 +36,13 @@
     ],
     "resources": [
       "binaries/**/*"
-    ]
-  }
+    ],
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.13",
+      "exceptionDomain": "",
+      "signingIdentity": null
+    }
+  },
+  "plugins": {}
 }

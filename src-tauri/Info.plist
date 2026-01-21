@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Ứng dụng cần truy cập camera để chia sẻ video.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Ứng dụng cần truy cập microphone để chia sẻ âm thanh.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Ứng dụng cần quyền ghi màn hình để chia sẻ màn hình cho lớp học.</string>
+</dict>
+</plist>

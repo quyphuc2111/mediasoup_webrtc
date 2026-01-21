@@ -15,10 +15,12 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     peers,
     localStream,
     isSharing,
+    isMicActive,
     connect,
     disconnect,
     startScreenShare,
     startMicrophone,
+    stopMicrophone,
     stopScreenShare,
   } = useMediasoup();
 
@@ -78,9 +80,15 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
 
         {connectionState === 'connected' && isSharing && (
           <>
-            <button onClick={startMicrophone} className="btn secondary">
-              🎤 Bật Microphone
-            </button>
+            {!isMicActive ? (
+              <button onClick={startMicrophone} className="btn secondary">
+                🎤 Bật Microphone
+              </button>
+            ) : (
+              <button onClick={stopMicrophone} className="btn secondary">
+                🎤 Tắt Microphone
+              </button>
+            )}
             <button onClick={stopScreenShare} className="btn danger">
               ⏹️ Dừng chia sẻ
             </button>

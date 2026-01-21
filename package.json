@@ -6,9 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "build:student": "tsc && vite build --config vite.config.student.ts index-student.html",
+    "build:student": "tsc && vite build --config vite.config.student.ts && node scripts/rename-student-html.js",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:build": "cd src-tauri && tauri build",
+    "tauri:build:student": "cd src-tauri && tauri build --config tauri.student.conf.json",
+    "prepare:binaries": "node scripts/prepare-binaries.js",
+    "build:teacher": "npm run prepare:binaries && npm run build && npm run tauri:build",
+    "build:student-app": "npm run build:student && npm run tauri:build:student",
+    "build:all": "npm run build:teacher && npm run build:student-app",
     "server:install": "cd mediasoup-server && npm install",
     "server:dev": "cd mediasoup-server && npm run dev",
     "server:build": "cd mediasoup-server && npm run build"

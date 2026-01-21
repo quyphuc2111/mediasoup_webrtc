@@ -44,7 +44,13 @@ export class MediasoupClient {
     this.isTeacher = isTeacher;
 
     // Check device support first
-    const handlerName = detectDevice();
+    // Check device support first
+    let handlerName = detectDevice();
+    if (!handlerName && (window as any).RTCPeerConnection) {
+      console.warn('Browser handler not detected, defaulting to Safari12 for Tauri/Mac...');
+      handlerName = 'Safari12';
+    }
+
     if (!handlerName) {
       throw new Error('Browser không hỗ trợ WebRTC. Vui lòng sử dụng Chrome, Firefox hoặc Edge.');
     }
@@ -67,7 +73,8 @@ export class MediasoupClient {
           }
 
           // Load device with rtpCapabilities
-          this.device = new Device();
+          // Load device with rtpCapabilities
+          this.device = new Device({ handlerName });
           await this.device.load({ routerRtpCapabilities: this.rtpCapabilities });
 
           this.events.onConnectionStateChange?.('connected');
@@ -250,7 +257,7 @@ export class MediasoupClient {
     }
   }
 
-  async produceMicrophone(stream: MediaStream): Promise<void> {
+  async produceMicrophone(stream: MediaStream): Promise<string | null> {
     if (!this.sendTransport) {
       await this.createSendTransport();
     }
@@ -261,7 +268,9 @@ export class MediasoupClient {
         track: audioTrack,
       });
       this.producers.set(producer.id, producer);
+      return producer.id;
     }
+    return null;
   }
 
   async consumeAll(): Promise<MediaStream> {
@@ -269,26 +278,56 @@ export class MediasoupClient {
       await this.createRecvTransport();
     }
 
+    console.log('[MediasoupClient] Requesting producers list...');
     const producers = await this.sendRequest('getProducers', {});
     const stream = new MediaStream();
 
-    if (Array.isArray(producers)) {
+    console.log('[MediasoupClient] Received producers:', producers);
+
+    if (Array.isArray(producers) && producers.length > 0) {
+      console.log(`[MediasoupClient] Consuming ${producers.length} producers...`);
       for (const { producerId } of producers) {
-        const consumer = await this.consume(producerId);
-        if (consumer) {
-          stream.addTrack(consumer.track);
+        console.log(`[MediasoupClient] Consuming producer: ${producerId}`);
+        try {
+          const consumer = await this.consume(producerId);
+          if (consumer) {
+            stream.addTrack(consumer.track);
+            console.log(`[MediasoupClient] ✅ Added track from producer ${producerId}, kind: ${consumer.track.kind}`);
+          } else {
+            console.warn(`[MediasoupClient] ⚠️ Failed to consume producer ${producerId}`);
+          }
+        } catch (error) {
+          console.error(`[MediasoupClient] ❌ Error consuming producer ${producerId}:`, error);
         }
       }
+    } else {
+      console.log('[MediasoupClient] No producers available to consume');
     }
 
+    console.log(`[MediasoupClient] Stream ready with ${stream.getTracks().length} tracks`);
     this.events.onStreamReady?.(stream);
     return stream;
   }
 
   async consume(producerId: string): Promise<Consumer | null> {
-    if (!this.recvTransport || !this.device) return null;
+    // Ensure recvTransport exists before consuming
+    if (!this.recvTransport) {
+      console.log('[MediasoupClient] Creating recvTransport for consume...');
+      await this.createRecvTransport();
+    }
+
+    if (!this.device) {
+      console.error('[MediasoupClient] Device not initialized, cannot consume');
+      return null;
+    }
+
+    if (!this.recvTransport) {
+      console.error('[MediasoupClient] recvTransport still not available after creation');
+      return null;
+    }
 
     try {
+      console.log(`[MediasoupClient] Consuming producer ${producerId}...`);
       const params = await this.sendRequest('consume', {
         producerId,
         rtpCapabilities: this.device.rtpCapabilities,
@@ -318,6 +357,32 @@ export class MediasoupClient {
       producer.close();
     }
     this.producers.clear();
+  }
+
+  stopAudioProducers(): void {
+    const audioProducers: Producer[] = [];
+    for (const producer of this.producers.values()) {
+      if (producer.kind === 'audio') {
+        audioProducers.push(producer);
+      }
+    }
+    
+    for (const producer of audioProducers) {
+      producer.close();
+      this.producers.delete(producer.id);
+      console.log('[MediasoupClient] Stopped audio producer:', producer.id);
+    }
+  }
+
+  stopProducer(producerId: string): void {
+    const producer = this.producers.get(producerId);
+    if (producer) {
+      producer.close();
+      this.producers.delete(producerId);
+      console.log('[MediasoupClient] Stopped producer:', producerId);
+    } else {
+      console.warn('[MediasoupClient] Producer not found:', producerId);
+    }
   }
 
   private closeAllConsumers(): void {
