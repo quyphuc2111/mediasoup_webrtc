@@ -121,15 +121,21 @@ export function useMediasoup() {
         }
       },
       onShutdown: async () => {
+        console.log('[useMediasoup] onShutdown called, isTeacher:', isTeacher);
         // Only handle shutdown for students
         if (!isTeacher) {
+          console.log('[useMediasoup] Student received shutdown command, executing...');
           try {
             const { invoke } = await import('@tauri-apps/api/core');
+            console.log('[useMediasoup] Calling shutdown_computer command...');
             await invoke('shutdown_computer');
+            console.log('[useMediasoup] ✅ Shutdown command executed successfully');
           } catch (err) {
-            console.error('Failed to shutdown computer:', err);
+            console.error('[useMediasoup] ❌ Failed to shutdown computer:', err);
             setError('Không thể tắt máy. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
           }
+        } else {
+          console.log('[useMediasoup] Teacher received shutdown command (ignored)');
         }
       },
       onNewProducer: async (producerId: string, kind: MediaKind, peerId?: string) => {
@@ -569,8 +575,15 @@ export function useMediasoup() {
   }, [stopScreenShare, stopMicrophone]);
 
   const shutdownStudent = useCallback((studentId: string) => {
+    console.log('[useMediasoup] shutdownStudent called with studentId:', studentId);
+    console.log('[useMediasoup] clientRef.current:', clientRef.current ? 'exists' : 'null');
+    
     if (clientRef.current) {
+      console.log('[useMediasoup] Calling sendShutdownCommand...');
       clientRef.current.sendShutdownCommand(studentId);
+    } else {
+      console.error('[useMediasoup] clientRef.current is null, cannot send shutdown command');
+      setError('Không thể gửi lệnh tắt máy: chưa kết nối');
     }
   }, []);
 

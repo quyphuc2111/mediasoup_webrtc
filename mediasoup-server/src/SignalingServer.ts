@@ -35,9 +35,10 @@ export class SignalingServer {
       ws.on('message', async (data) => {
         try {
           const message: SignalingMessage = JSON.parse(data.toString());
+          console.log('[SignalingServer] Raw message received:', message.type, JSON.stringify(message.data));
           await this.handleMessage(ws, message);
         } catch (error) {
-          console.error('Error handling message:', error);
+          console.error('[SignalingServer] Error handling message:', error);
           this.send(ws, { type: 'error', data: { message: 'Invalid message' } });
         }
       });
@@ -70,6 +71,8 @@ export class SignalingServer {
 
   private async handleMessage(ws: WebSocket, message: SignalingMessage): Promise<void> {
     const { type, data } = message;
+    
+    console.log(`[SignalingServer] Received message type: ${type}`, data);
 
     switch (type) {
       case 'join':
@@ -379,20 +382,29 @@ export class SignalingServer {
   }
 
   private async handleShutdownStudent(ws: WebSocket, data: { studentId: string }): Promise<void> {
+    console.log('[SignalingServer] handleShutdownStudent called with data:', data);
     const info = this.clients.get(ws);
-    if (!info) return;
+    if (!info) {
+      console.error('[SignalingServer] No client info found for WebSocket');
+      return;
+    }
 
     const room = this.manager.getRoom(info.roomId);
-    if (!room) return;
+    if (!room) {
+      console.error('[SignalingServer] Room not found:', info.roomId);
+      return;
+    }
 
     const peer = room.getPeer(info.peerId);
     if (!peer || !peer.isTeacher) {
+      console.warn('[SignalingServer] Only teacher can shutdown students. Peer:', peer);
       this.send(ws, { type: 'error', data: { message: 'Only teacher can shutdown students' } });
       return;
     }
 
     const studentPeer = room.getPeer(data.studentId);
     if (!studentPeer || studentPeer.isTeacher) {
+      console.warn('[SignalingServer] Student not found:', data.studentId);
       this.send(ws, { type: 'error', data: { message: 'Student not found' } });
       return;
     }
@@ -404,9 +416,11 @@ export class SignalingServer {
 
     if (studentWs) {
       // Send shutdown command to student
+      console.log(`[SignalingServer] Sending shutdown command to student ${studentPeer.name} (${data.studentId})`);
       this.send(studentWs, { type: 'shutdown', data: {} });
-      console.log(`[SignalingServer] Teacher ${peer.name} requested shutdown for student ${studentPeer.name}`);
+      console.log(`[SignalingServer] ✅ Teacher ${peer.name} requested shutdown for student ${studentPeer.name}`);
     } else {
+      console.error('[SignalingServer] Student WebSocket connection not found for:', data.studentId);
       this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
     }
   }

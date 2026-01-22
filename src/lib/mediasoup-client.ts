@@ -87,8 +87,13 @@ export class MediasoupClient {
       };
 
       this.ws.onmessage = (event) => {
-        const message = JSON.parse(event.data);
-        this.handleMessage(message);
+        try {
+          const message = JSON.parse(event.data);
+          console.log('[MediasoupClient] Received message from server:', message.type, message.data);
+          this.handleMessage(message);
+        } catch (error) {
+          console.error('[MediasoupClient] Error parsing message:', error, event.data);
+        }
       };
 
       this.ws.onerror = () => {
@@ -133,6 +138,7 @@ export class MediasoupClient {
         this.events.onError?.(data.message);
         break;
       case 'shutdown':
+        console.log('[MediasoupClient] Received shutdown command from server');
         this.events.onShutdown?.();
         break;
     }
@@ -486,10 +492,14 @@ export class MediasoupClient {
 
   sendShutdownCommand(studentId: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[MediasoupClient] Cannot send shutdown command: WebSocket not connected');
       this.events.onError?.('WebSocket chưa kết nối');
       return;
     }
 
-    this.ws.send(JSON.stringify({ type: 'shutdownStudent', data: { studentId } }));
+    console.log('[MediasoupClient] Sending shutdown command for student:', studentId);
+    const message = { type: 'shutdownStudent', data: { studentId } };
+    console.log('[MediasoupClient] Shutdown message:', message);
+    this.ws.send(JSON.stringify(message));
   }
 }

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useMediasoup } from '../hooks/useMediasoup';
 import { VideoPlayer } from './VideoPlayer';
 
@@ -9,6 +10,7 @@ interface TeacherViewProps {
 }
 
 export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherViewProps) {
+  const [shutdownConfirm, setShutdownConfirm] = useState<{ studentId: string; studentName: string } | null>(null);
   const {
     connectionState,
     error,
@@ -135,13 +137,26 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
                 <span>👤 {peer.name}</span>
                 {connectionState === 'connected' && (
                   <button
-                    onClick={() => {
-                      if (window.confirm(`Bạn có chắc muốn tắt máy của học sinh "${peer.name}"?`)) {
-                        shutdownStudent(peer.id);
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      console.log('[TeacherView] Button clicked for student:', peer.id, peer.name);
+                      
+                      // For testing: hold Shift key to skip confirmation
+                      const skipConfirm = e.shiftKey || e.metaKey || e.ctrlKey;
+                      
+                      if (skipConfirm) {
+                        console.log('[TeacherView] ✅ Skipping confirmation (key held), sending shutdown command');
+                        if (shutdownStudent) {
+                          shutdownStudent(peer.id);
+                        }
+                      } else {
+                        // Show confirmation dialog
+                        setShutdownConfirm({ studentId: peer.id, studentName: peer.name });
                       }
                     }}
                     className="btn danger small"
-                    title="Tắt máy học sinh"
+                    title="Tắt máy học sinh (Giữ Shift/Cmd/Ctrl để bỏ qua xác nhận)"
                   >
                     🔴 Tắt máy
                   </button>
@@ -151,6 +166,73 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
           </ul>
         </div>
       )}
+      
+      {/* Shutdown Confirmation Dialog */}
+      {shutdownConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: 'var(--bg-secondary)',
+            padding: '2rem',
+            borderRadius: '12px',
+            border: '1px solid var(--border)',
+            maxWidth: '400px',
+            width: '90%'
+          }}>
+            <h3 style={{ marginTop: 0 }}>⚠️ Xác nhận tắt máy</h3>
+            <p>Bạn có chắc muốn tắt máy của học sinh <strong>"{shutdownConfirm.studentName}"</strong>?</p>
+            <div style={{ display: 'flex', gap: '1rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
+              <button
+                onClick={() => {
+                  console.log('[TeacherView] User cancelled shutdown');
+                  setShutdownConfirm(null);
+                }}
+                className="btn secondary"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={() => {
+                  console.log('[TeacherView] ✅ User confirmed, sending shutdown command to student:', shutdownConfirm.studentId, shutdownConfirm.studentName);
+                  if (shutdownStudent) {
+                    try {
+                      shutdownStudent(shutdownConfirm.studentId);
+                      console.log('[TeacherView] ✅ shutdownStudent called successfully');
+                    } catch (error) {
+                      console.error('[TeacherView] ❌ Error calling shutdownStudent:', error);
+                    }
+                  } else {
+                    console.error('[TeacherView] ❌ shutdownStudent is undefined!');
+                  }
+                  setShutdownConfirm(null);
+                }}
+                className="btn danger"
+              >
+                🔴 Xác nhận tắt máy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Debug info */}
+      <div style={{ marginTop: '1rem', padding: '0.5rem', background: '#1a1a1a', borderRadius: '8px', fontSize: '0.8rem' }}>
+        <strong>Debug Info:</strong>
+        <div>Peers count: {peers.length}</div>
+        <div>Students: {peers.filter(p => !p.isTeacher).length}</div>
+        <div>Connection state: {connectionState}</div>
+        <div>shutdownStudent type: {typeof shutdownStudent}</div>
+      </div>
     </div>
   );
 }
