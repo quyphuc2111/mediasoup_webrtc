@@ -2,6 +2,12 @@
 use std::process::Command;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ScreenSize {
+    width: u32,
+    height: u32,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct MouseEvent {
     action: String, // "move", "click", "rightClick", "doubleClick", "scroll"
@@ -553,11 +559,110 @@ fn control_keyboard(event: KeyboardEvent) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn get_screen_size() -> Result<ScreenSize, String> {
+    println!("[get_screen_size] Getting screen size");
+    
+    #[cfg(target_os = "macos")]
+    {
+        // Use osascript to get screen size
+        let script = "tell application \"Finder\"\n\
+                      set screenSize to bounds of window of desktop\n\
+                      set screenWidth to item 3 of screenSize\n\
+                      set screenHeight to item 4 of screenSize\n\
+                      return screenWidth & \",\" & screenHeight\n\
+                      end tell";
+        
+        let output = Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|e| format!("Failed to get screen size: {}", e))?;
+        
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = output_str.trim().split(',').collect();
+        
+        if parts.len() >= 2 {
+            let width = parts[0].trim().parse::<u32>()
+                .map_err(|_| "Failed to parse width".to_string())?;
+            let height = parts[1].trim().parse::<u32>()
+                .map_err(|_| "Failed to parse height".to_string())?;
+            Ok(ScreenSize { width, height })
+        } else {
+            // Fallback: use system_profiler
+            let output = Command::new("system_profiler")
+                .args(["SPDisplaysDataType"])
+                .output()
+                .map_err(|e| format!("Failed to get screen size: {}", e))?;
+            
+            let output_str = String::from_utf8_lossy(&output.stdout);
+            // Parse resolution from output (e.g., "Resolution: 1920 x 1080")
+            // For now, return default
+            Ok(ScreenSize { width: 1920, height: 1080 })
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell to get screen size
+        let script = "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width; [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height";
+        let output = Command::new("powershell")
+            .args(["-Command", &script])
+            .output()
+            .map_err(|e| format!("Failed to get screen size: {}", e))?;
+        
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = output_str.trim().lines().collect();
+        
+        if lines.len() >= 2 {
+            let width = lines[0].trim().parse::<u32>()
+                .map_err(|_| "Failed to parse width".to_string())?;
+            let height = lines[1].trim().parse::<u32>()
+                .map_err(|_| "Failed to parse height".to_string())?;
+            Ok(ScreenSize { width, height })
+        } else {
+            Ok(ScreenSize { width: 1920, height: 1080 })
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Use xrandr to get screen size
+        let output = Command::new("xrandr")
+            .args(["--current"])
+            .output()
+            .map_err(|e| format!("Failed to get screen size: {}", e))?;
+        
+        let output_str = String::from_utf8_lossy(&output.stdout);
+        // Parse output (e.g., "Screen 0: minimum 320 x 200, current 1920 x 1080")
+        for line in output_str.lines() {
+            if line.contains("current") {
+                if let Some(current_part) = line.split("current").nth(1) {
+                    let parts: Vec<&str> = current_part.split('x').collect();
+                    if parts.len() >= 2 {
+                        let width = parts[0].trim().parse::<u32>()
+                            .map_err(|_| "Failed to parse width".to_string())?;
+                        let height = parts[1].split(',').next()
+                            .and_then(|h| h.trim().parse::<u32>().ok())
+                            .ok_or_else(|| "Failed to parse height".to_string())?;
+                        return Ok(ScreenSize { width, height });
+                    }
+                }
+            }
+        }
+        Ok(ScreenSize { width: 1920, height: 1080 })
+    }
+    
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Err("Screen size detection not supported on this platform".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![control_computer, control_mouse, control_keyboard])
+        .invoke_handler(tauri::generate_handler![control_computer, control_mouse, control_keyboard, get_screen_size])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

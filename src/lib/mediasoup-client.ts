@@ -21,6 +21,7 @@ export interface MediasoupClientEvents {
   onMouseControl?: (event: any) => void;
   onKeyboardControl?: (event: any) => void;
   onRequestScreenShare?: () => void;
+  onScreenSize?: (size: { width: number; height: number }, peerId?: string) => void;
 }
 
 export class MediasoupClient {
@@ -148,6 +149,10 @@ export class MediasoupClient {
       case 'requestScreenShare':
         console.log('[MediasoupClient] Received screen share request from server');
         this.events.onRequestScreenShare?.();
+        break;
+      case 'screenSize':
+        console.log('[MediasoupClient] Received screen size from server:', data);
+        this.events.onScreenSize?.(data, (data as any).peerId);
         break;
     }
   }
@@ -544,6 +549,17 @@ export class MediasoupClient {
 
     console.log('[MediasoupClient] Requesting screen share from student:', studentId);
     const message = { type: 'requestStudentScreenShare', data: { studentId } };
+    this.ws.send(JSON.stringify(message));
+  }
+
+  sendScreenSize(size: { width: number; height: number }): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[MediasoupClient] Cannot send screen size: WebSocket not connected');
+      return;
+    }
+
+    console.log('[MediasoupClient] Sending screen size:', size);
+    const message = { type: 'screenSize', data: size };
     this.ws.send(JSON.stringify(message));
   }
 }

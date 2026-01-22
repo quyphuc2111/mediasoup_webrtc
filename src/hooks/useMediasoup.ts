@@ -274,6 +274,21 @@ export function useMediasoup() {
           try {
             await startScreenShare(false); // Start without audio
             console.log('[useMediasoup] ✅ Student started screen sharing for remote control');
+            
+            // Send screen size to teacher after screen share starts
+            try {
+              const { invoke } = await import('@tauri-apps/api/core');
+              const screenSize = await invoke<{ width: number; height: number }>('get_screen_size');
+              console.log('[useMediasoup] Student screen size:', screenSize);
+              
+              // Send screen size via WebSocket
+              if (clientRef.current) {
+                clientRef.current.sendScreenSize(screenSize);
+                console.log('[useMediasoup] ✅ Sent screen size to teacher');
+              }
+            } catch (err) {
+              console.warn('[useMediasoup] Failed to get/send screen size:', err);
+            }
           } catch (err) {
             console.error('[useMediasoup] ❌ Failed to start screen sharing:', err);
             setError('Không thể chia sẻ màn hình. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
@@ -681,6 +696,9 @@ export function useMediasoup() {
       setError('Không thể yêu cầu chia sẻ màn hình: chưa kết nối');
     }
   }, []);
+  
+  // Store student screen sizes - will be set when students send them
+  const [studentScreenSizes, setStudentScreenSizes] = useState<Map<string, { width: number; height: number }>>(new Map());
 
   return {
     connectionState,
@@ -706,5 +724,9 @@ export function useMediasoup() {
     controlKeyboard,
     requestStudentScreenShare,
     studentVideoStreams,
+    studentScreenSizes,
   };
+  
+
+  
 }

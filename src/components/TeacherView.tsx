@@ -43,6 +43,7 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     controlKeyboard,
     requestStudentScreenShare,
     studentVideoStreams,
+    studentScreenSizes,
   } = useMediasoup();
 
   const handleConnect = async () => {
@@ -247,6 +248,7 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
           studentId={remoteControlStudent.studentId}
           studentName={remoteControlStudent.studentName}
           studentStream={studentVideoStreams.get(remoteControlStudent.studentId) || null}
+          studentScreenSize={studentScreenSizes.get(remoteControlStudent.studentId) || null}
           onMouseControl={(event) => controlMouse(remoteControlStudent.studentId, event)}
           onKeyboardControl={(event) => controlKeyboard(remoteControlStudent.studentId, event)}
           onClose={() => setRemoteControlStudent(null)}
