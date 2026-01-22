@@ -108,6 +108,9 @@ export class SignalingServer {
       case 'requestStudentScreenShare':
         await this.handleRequestStudentScreenShare(ws, data);
         break;
+      case 'screenSize':
+        await this.handleScreenSize(ws, data);
+        break;
       default:
         console.warn('Unknown message type:', type);
     }
@@ -543,6 +546,35 @@ export class SignalingServer {
       console.log(`[SignalingServer] ✅ Teacher requested screen share from student ${studentPeer.name}`);
     } else {
       this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
+    }
+  }
+
+  private async handleScreenSize(ws: WebSocket, data: { width: number; height: number }): Promise<void> {
+    console.log('[SignalingServer] handleScreenSize called with data:', data);
+    const info = this.clients.get(ws);
+    if (!info) return;
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) return;
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer) return;
+
+    // Forward screen size to teacher
+    if (!peer.isTeacher) {
+      // Student sent screen size - forward to teacher
+      const teacherWs = Array.from(this.clients.entries()).find(
+        ([_, clientInfo]) => clientInfo.roomId === info.roomId && 
+        room.getPeer(clientInfo.peerId)?.isTeacher
+      )?.[0];
+
+      if (teacherWs) {
+        this.send(teacherWs, {
+          type: 'screenSize',
+          data: { ...data, peerId: info.peerId },
+        });
+        console.log(`[SignalingServer] ✅ Forwarded screen size from student ${peer.name} to teacher`);
+      }
     }
   }
 

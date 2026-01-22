@@ -295,6 +295,17 @@ export function useMediasoup() {
           }
         }
       },
+      onScreenSize: (size, peerId) => {
+        console.log('[useMediasoup] onScreenSize called, size:', size, 'peerId:', peerId);
+        if (isTeacher && peerId) {
+          setStudentScreenSizes(prev => {
+            const newMap = new Map(prev);
+            newMap.set(peerId, size);
+            return newMap;
+          });
+          console.log('[useMediasoup] ✅ Received screen size from student:', peerId, size);
+        }
+      },
     });
 
     clientRef.current = client;
