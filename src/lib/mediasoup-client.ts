@@ -13,7 +13,7 @@ export interface MediasoupClientEvents {
   onConnectionStateChange: (state: ConnectionState) => void;
   onNewProducer: (producerId: string, kind: MediaKind, peerId?: string) => void;
   onProducerClosed: (producerId: string) => void;
-  onPeerJoined: (peerId: string, name: string, isTeacher: boolean) => void;
+  onPeerJoined: (peerId: string, name: string, isTeacher: boolean, udpPort?: number, studentIp?: string) => void;
   onPeerLeft: (peerId: string, wasTeacher: boolean) => void;
   onError: (error: string) => void;
   onStreamReady: (stream: MediaStream) => void;
@@ -22,6 +22,7 @@ export interface MediasoupClientEvents {
   onKeyboardControl?: (event: any) => void;
   onRequestScreenShare?: () => void;
   onScreenSize?: (size: { width: number; height: number }, peerId?: string) => void;
+  onStudentUdpPort?: (peerId: string, udpPort: number, studentIp?: string) => void;
 }
 
 export class MediasoupClient {
@@ -66,8 +67,26 @@ export class MediasoupClient {
 
       this.ws.onopen = async () => {
         try {
+          // Get UDP port and IP for students
+          let udpPort: number | undefined;
+          let studentIp: string | undefined;
+          if (!isTeacher && typeof window !== 'undefined' && (window as any).__TAURI__) {
+            try {
+              const { invoke } = await import('@tauri-apps/api/core');
+              udpPort = await invoke<number>('get_udp_port');
+              studentIp = await invoke<string>('get_local_ip_address');
+              if (udpPort) {
+                // Start UDP server
+                await invoke('start_udp_server', { port: udpPort });
+                console.log(`[MediasoupClient] Started UDP server on port ${udpPort}, IP: ${studentIp}`);
+              }
+            } catch (err) {
+              console.warn('[MediasoupClient] Failed to get/start UDP port or IP:', err);
+            }
+          }
+
           // Join room - response contains rtpCapabilities
-          const joinResponse = await this.sendRequest('join', { roomId, peerId, name, isTeacher });
+          const joinResponse = await this.sendRequest('join', { roomId, peerId, name, isTeacher, udpPort, studentIp });
 
           // Store rtpCapabilities from response
           this.rtpCapabilities = joinResponse.rtpCapabilities;
@@ -123,7 +142,10 @@ export class MediasoupClient {
         this.events.onNewProducer?.(data.producerId, data.kind, data.peerId);
         break;
       case 'peerJoined':
-        this.events.onPeerJoined?.(data.peerId, data.name, data.isTeacher);
+        this.events.onPeerJoined?.(data.peerId, data.name, data.isTeacher, data.udpPort, data.studentIp);
+        break;
+      case 'studentUdpPort':
+        this.events.onStudentUdpPort?.(data.peerId, data.udpPort, data.studentIp);
         break;
       case 'peerLeft':
         this.events.onPeerLeft?.(data.peerId, data.wasTeacher);

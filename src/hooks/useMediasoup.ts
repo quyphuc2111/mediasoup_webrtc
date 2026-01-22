@@ -5,6 +5,8 @@ interface Peer {
   id: string;
   name: string;
   isTeacher: boolean;
+  udpPort?: number;
+  studentIp?: string;
 }
 
 // Helper function to check MediaDevices availability
@@ -112,8 +114,17 @@ export function useMediasoup() {
     const client = new MediasoupClient({
       onConnectionStateChange: setConnectionState,
       onError: setError,
-      onPeerJoined: (id, peerName, peerIsTeacher) => {
-        setPeers(prev => [...prev, { id, name: peerName, isTeacher: peerIsTeacher }]);
+      onPeerJoined: (id: string, peerName: string, peerIsTeacher: boolean, udpPort?: number, studentIp?: string) => {
+        setPeers(prev => {
+          const existing = prev.find(p => p.id === id);
+          if (existing) {
+            return prev.map(p => p.id === id ? { ...p, name: peerName, udpPort, studentIp } : p);
+          }
+          return [...prev, { id, name: peerName, isTeacher: peerIsTeacher, udpPort, studentIp }];
+        });
+      },
+      onStudentUdpPort: (peerId: string, udpPort: number, studentIp?: string) => {
+        setPeers(prev => prev.map(p => p.id === peerId ? { ...p, udpPort, studentIp } : p));
       },
       onPeerLeft: (id, wasTeacher) => {
         setPeers(prev => prev.filter(p => p.id !== id));
@@ -707,6 +718,47 @@ export function useMediasoup() {
       setError('Không thể yêu cầu chia sẻ màn hình: chưa kết nối');
     }
   }, []);
+
+  // UDP Control functions
+  const controlMouseUdp = useCallback(async (udpPort: number, studentIp: string, event: any) => {
+    console.log('[useMediasoup] controlMouseUdp called with IP:', studentIp, 'port:', udpPort, 'event:', event);
+    
+    if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('send_udp_message', {
+          ip: studentIp,
+          port: udpPort,
+          message: JSON.stringify({ type: 'mouse', ...event }),
+        });
+      } catch (err) {
+        console.error('[useMediasoup] Failed to send UDP mouse control:', err);
+        setError('Không thể gửi lệnh điều khiển chuột qua UDP: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    } else {
+      setError('UDP control chỉ hoạt động trong Tauri app');
+    }
+  }, []);
+
+  const controlKeyboardUdp = useCallback(async (udpPort: number, studentIp: string, event: any) => {
+    console.log('[useMediasoup] controlKeyboardUdp called with IP:', studentIp, 'port:', udpPort, 'event:', event);
+    
+    if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('send_udp_message', {
+          ip: studentIp,
+          port: udpPort,
+          message: JSON.stringify({ type: 'keyboard', ...event }),
+        });
+      } catch (err) {
+        console.error('[useMediasoup] Failed to send UDP keyboard control:', err);
+        setError('Không thể gửi lệnh điều khiển bàn phím qua UDP: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    } else {
+      setError('UDP control chỉ hoạt động trong Tauri app');
+    }
+  }, []);
   
   // Store student screen sizes - will be set when students send them
   const [studentScreenSizes, setStudentScreenSizes] = useState<Map<string, { width: number; height: number }>>(new Map());
@@ -733,6 +785,8 @@ export function useMediasoup() {
     controlStudent,
     controlMouse,
     controlKeyboard,
+    controlMouseUdp,
+    controlKeyboardUdp,
     requestStudentScreenShare,
     studentVideoStreams,
     studentScreenSizes,

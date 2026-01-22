@@ -41,6 +41,8 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     controlStudent,
     controlMouse,
     controlKeyboard,
+    controlMouseUdp,
+    controlKeyboardUdp,
     requestStudentScreenShare,
     studentVideoStreams,
     studentScreenSizes,
@@ -157,12 +159,11 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
                   <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <button
                       onClick={() => {
-                        // Request student to share screen first
-                        requestStudentScreenShare(peer.id);
+                        // Open remote control view (UDP control, no need for screen share)
                         setRemoteControlStudent({ studentId: peer.id, studentName: peer.name });
                       }}
                       className="btn primary small"
-                      title="Điều khiển máy học sinh từ xa"
+                      title="Điều khiển máy học sinh từ xa qua UDP"
                     >
                       🖥️ Điều khiển máy
                     </button>
@@ -243,17 +244,36 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
       )}
 
       {/* Remote Control View */}
-      {remoteControlStudent && (
-        <RemoteControlView
-          studentId={remoteControlStudent.studentId}
-          studentName={remoteControlStudent.studentName}
-          studentStream={studentVideoStreams.get(remoteControlStudent.studentId) || null}
-          studentScreenSize={studentScreenSizes.get(remoteControlStudent.studentId) || null}
-          onMouseControl={(event) => controlMouse(remoteControlStudent.studentId, event)}
-          onKeyboardControl={(event) => controlKeyboard(remoteControlStudent.studentId, event)}
-          onClose={() => setRemoteControlStudent(null)}
-        />
-      )}
+      {remoteControlStudent && (() => {
+        const peer = peers.find(p => p.id === remoteControlStudent.studentId);
+        const useUdp = peer?.udpPort !== undefined && peer?.studentIp !== undefined;
+        
+        return (
+          <RemoteControlView
+            studentId={remoteControlStudent.studentId}
+            studentName={remoteControlStudent.studentName}
+            studentStream={studentVideoStreams.get(remoteControlStudent.studentId) || null}
+            studentScreenSize={studentScreenSizes.get(remoteControlStudent.studentId) || null}
+            studentIp={peer?.studentIp}
+            studentUdpPort={peer?.udpPort}
+            onMouseControl={(event) => {
+              if (useUdp && peer?.udpPort && peer?.studentIp) {
+                controlMouseUdp(peer.udpPort, peer.studentIp, event);
+              } else {
+                controlMouse(remoteControlStudent.studentId, event);
+              }
+            }}
+            onKeyboardControl={(event) => {
+              if (useUdp && peer?.udpPort && peer?.studentIp) {
+                controlKeyboardUdp(peer.udpPort, peer.studentIp, event);
+              } else {
+                controlKeyboard(remoteControlStudent.studentId, event);
+              }
+            }}
+            onClose={() => setRemoteControlStudent(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

@@ -116,8 +116,8 @@ export class SignalingServer {
     }
   }
 
-  private async handleJoin(ws: WebSocket, data: { roomId: string; peerId: string; name: string; isTeacher: boolean }): Promise<void> {
-    const { roomId, peerId, name, isTeacher } = data;
+  private async handleJoin(ws: WebSocket, data: { roomId: string; peerId: string; name: string; isTeacher: boolean; udpPort?: number; studentIp?: string }): Promise<void> {
+    const { roomId, peerId, name, isTeacher, udpPort, studentIp } = data;
     
     const room = await this.manager.getOrCreateRoom(roomId);
     
@@ -135,7 +135,18 @@ export class SignalingServer {
 
     room.addPeer(peerId, name, isTeacher);
     
-    this.clients.set(ws, { peerId, roomId, ws });
+    const clientInfo: ClientInfo = { peerId, roomId, ws };
+    this.clients.set(ws, clientInfo);
+
+    // Store UDP port and IP if provided (for students)
+    if (udpPort && !isTeacher) {
+      const peer = room.getPeer(peerId);
+      if (peer) {
+        (peer as any).udpPort = udpPort;
+        (peer as any).studentIp = studentIp || '127.0.0.1';
+        console.log(`[SignalingServer] Student ${name} (${peerId}) UDP port: ${udpPort}, IP: ${(peer as any).studentIp}`);
+      }
+    }
 
     this.send(ws, {
       type: 'joined',
@@ -150,8 +161,23 @@ export class SignalingServer {
     // Notify others
     this.broadcast(roomId, {
       type: 'peerJoined',
-      data: { peerId, name, isTeacher },
+      data: { peerId, name, isTeacher, udpPort, studentIp },
     }, ws);
+
+    // If teacher joined, send all students' UDP ports and IPs
+    if (isTeacher) {
+      const students = room.getStudents();
+      for (const student of students) {
+        const studentUdpPort = (student as any).udpPort;
+        const studentIp = (student as any).studentIp;
+        if (studentUdpPort) {
+          this.send(ws, {
+            type: 'studentUdpPort',
+            data: { peerId: student.id, udpPort: studentUdpPort, studentIp: studentIp || '127.0.0.1' },
+          });
+        }
+      }
+    }
 
     console.log(`Peer ${name} joined room ${roomId} as ${isTeacher ? 'Teacher' : 'Student'}`);
   }

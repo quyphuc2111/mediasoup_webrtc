@@ -1,6 +1,7 @@
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::path::PathBuf;
+use std::net::UdpSocket;
 use tauri::{State, Manager, AppHandle};
 use serde::{Deserialize, Serialize};
 
@@ -273,6 +274,22 @@ fn get_server_info(state: State<ServerState>) -> Result<ServerInfo, String> {
     info_guard.clone().ok_or_else(|| "Server not running".to_string())
 }
 
+#[tauri::command]
+fn send_udp_message(ip: String, port: u16, message: String) -> Result<String, String> {
+    println!("[send_udp_message] Sending to {}:{} - {}", ip, port, message);
+    
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("Failed to bind UDP socket: {}", e))?;
+    
+    let target = format!("{}:{}", ip, port);
+    let data = message.as_bytes();
+    
+    socket.send_to(data, &target)
+        .map_err(|e| format!("Failed to send UDP message: {}", e))?;
+    
+    Ok(format!("Message sent to {}", target))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -281,7 +298,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
-            get_server_info
+            get_server_info,
+            send_udp_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
