@@ -120,6 +120,18 @@ export function useMediasoup() {
           setRemoteStream(null);
         }
       },
+      onShutdown: async () => {
+        // Only handle shutdown for students
+        if (!isTeacher) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('shutdown_computer');
+          } catch (err) {
+            console.error('Failed to shutdown computer:', err);
+            setError('Không thể tắt máy. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
+          }
+        }
+      },
       onNewProducer: async (producerId: string, kind: MediaKind, peerId?: string) => {
         // Students: consume teacher's producers (video + audio)
         if (!client.isTeacher) {
@@ -556,6 +568,12 @@ export function useMediasoup() {
     setMicStream(null);
   }, [stopScreenShare, stopMicrophone]);
 
+  const shutdownStudent = useCallback((studentId: string) => {
+    if (clientRef.current) {
+      clientRef.current.sendShutdownCommand(studentId);
+    }
+  }, []);
+
   return {
     connectionState,
     error,
@@ -575,5 +593,6 @@ export function useMediasoup() {
     enablePushToTalk,
     disablePushToTalk,
     initializeStudentMicrophone,
+    shutdownStudent,
   };
 }

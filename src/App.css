@@ -502,10 +502,23 @@ h1 {
 .peers-list li {
   padding: 0.5rem 0;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
 }
 
 .peers-list li:last-child {
   border-bottom: none;
+}
+
+.peers-list li span {
+  flex: 1;
+}
+
+.btn.small {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
 }
 
 .waiting-message {

@@ -96,6 +96,9 @@ export class SignalingServer {
       case 'getProducers':
         await this.handleGetProducers(ws);
         break;
+      case 'shutdownStudent':
+        await this.handleShutdownStudent(ws, data);
+        break;
       default:
         console.warn('Unknown message type:', type);
     }
@@ -373,6 +376,39 @@ export class SignalingServer {
     }
 
     this.send(ws, { type: 'producers', data: producers });
+  }
+
+  private async handleShutdownStudent(ws: WebSocket, data: { studentId: string }): Promise<void> {
+    const info = this.clients.get(ws);
+    if (!info) return;
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) return;
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer || !peer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Only teacher can shutdown students' } });
+      return;
+    }
+
+    const studentPeer = room.getPeer(data.studentId);
+    if (!studentPeer || studentPeer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Student not found' } });
+      return;
+    }
+
+    // Find student's WebSocket connection
+    const studentWs = Array.from(this.clients.entries()).find(
+      ([_, clientInfo]) => clientInfo.roomId === info.roomId && clientInfo.peerId === data.studentId
+    )?.[0];
+
+    if (studentWs) {
+      // Send shutdown command to student
+      this.send(studentWs, { type: 'shutdown', data: {} });
+      console.log(`[SignalingServer] Teacher ${peer.name} requested shutdown for student ${studentPeer.name}`);
+    } else {
+      this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
+    }
   }
 
   private handleDisconnect(ws: WebSocket): void {

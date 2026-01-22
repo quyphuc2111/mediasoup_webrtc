@@ -17,6 +17,7 @@ export interface MediasoupClientEvents {
   onPeerLeft: (peerId: string, wasTeacher: boolean) => void;
   onError: (error: string) => void;
   onStreamReady: (stream: MediaStream) => void;
+  onShutdown?: () => void;
 }
 
 export class MediasoupClient {
@@ -130,6 +131,9 @@ export class MediasoupClient {
         break;
       case 'error':
         this.events.onError?.(data.message);
+        break;
+      case 'shutdown':
+        this.events.onShutdown?.();
         break;
     }
   }
@@ -478,5 +482,14 @@ export class MediasoupClient {
     this.cleanup();
     this.ws?.close();
     this.ws = null;
+  }
+
+  sendShutdownCommand(studentId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.events.onError?.('WebSocket chưa kết nối');
+      return;
+    }
+
+    this.ws.send(JSON.stringify({ type: 'shutdownStudent', data: { studentId } }));
   }
 }

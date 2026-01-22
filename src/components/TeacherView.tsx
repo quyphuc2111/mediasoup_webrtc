@@ -23,6 +23,7 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     startMicrophone,
     stopMicrophone,
     stopScreenShare,
+    shutdownStudent,
   } = useMediasoup();
 
   const handleConnect = async () => {
@@ -130,7 +131,22 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
           <h3>Danh sách học sinh:</h3>
           <ul>
             {peers.filter(p => !p.isTeacher).map(peer => (
-              <li key={peer.id}>👤 {peer.name}</li>
+              <li key={peer.id}>
+                <span>👤 {peer.name}</span>
+                {connectionState === 'connected' && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm(`Bạn có chắc muốn tắt máy của học sinh "${peer.name}"?`)) {
+                        shutdownStudent(peer.id);
+                      }
+                    }}
+                    className="btn danger small"
+                    title="Tắt máy học sinh"
+                  >
+                    🔴 Tắt máy
+                  </button>
+                )}
+              </li>
             ))}
           </ul>
         </div>
