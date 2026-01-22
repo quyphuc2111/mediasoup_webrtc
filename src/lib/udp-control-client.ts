@@ -9,11 +9,10 @@ export interface UdpControlConfig {
 }
 
 export class UdpControlClient {
-  private socket: UdpSocket | null = null;
   private config: UdpControlConfig | null = null;
 
   constructor() {
-    // UDP socket will be created when needed
+    // UDP control client for sending commands via Tauri
   }
 
   async connect(config: UdpControlConfig): Promise<void> {
@@ -93,12 +92,5 @@ export class UdpControlClient {
 
   disconnect(): void {
     this.config = null;
-    this.socket = null;
   }
-}
-
-// Type for UDP socket (will be provided by Tauri)
-interface UdpSocket {
-  send(data: Uint8Array, address: string, port: number): Promise<void>;
-  close(): void;
 }

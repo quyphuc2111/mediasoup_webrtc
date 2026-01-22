@@ -43,7 +43,6 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     controlKeyboard,
     controlMouseUdp,
     controlKeyboardUdp,
-    requestStudentScreenShare,
     studentVideoStreams,
     studentScreenSizes,
   } = useMediasoup();
