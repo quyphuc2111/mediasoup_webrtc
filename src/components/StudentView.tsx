@@ -115,6 +115,172 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
     };
   }, []);
 
+  // Block all keyboard and mouse interactions when viewing stream
+  useEffect(() => {
+    if (!isViewingStream) return;
+
+    // Block all keyboard events
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Allow only specific keys for controls (if needed)
+      // But block everything else including ESC, F11, etc.
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    const handleKeyPress = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    // Block all mouse events
+    const handleMouseDown = (e: MouseEvent) => {
+      // Only allow clicks on overlay controls
+      const target = e.target as HTMLElement;
+      if (!target.closest('.stream-controls-overlay')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.stream-controls-overlay')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.stream-controls-overlay')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    const handleDoubleClick = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      return false;
+    };
+
+    // Block touch events
+    const handleTouchStart = (e: TouchEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.stream-controls-overlay')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.stream-controls-overlay')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.stream-controls-overlay')) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return false;
+      }
+    };
+
+    // Add event listeners with capture phase to catch events early
+    const options = { capture: true, passive: false };
+
+    // Keyboard events
+    document.addEventListener('keydown', handleKeyDown, options);
+    document.addEventListener('keyup', handleKeyUp, options);
+    document.addEventListener('keypress', handleKeyPress, options);
+
+    // Mouse events
+    document.addEventListener('mousedown', handleMouseDown, options);
+    document.addEventListener('mouseup', handleMouseUp, options);
+    document.addEventListener('click', handleClick, options);
+    document.addEventListener('contextmenu', handleContextMenu, options);
+    document.addEventListener('dblclick', handleDoubleClick, options);
+    document.addEventListener('wheel', handleWheel, options);
+
+    // Touch events
+    document.addEventListener('touchstart', handleTouchStart, options);
+    document.addEventListener('touchend', handleTouchEnd, options);
+    document.addEventListener('touchmove', handleTouchMove, options);
+
+    // Prevent text selection
+    document.body.style.userSelect = 'none';
+    document.body.style.setProperty('-webkit-user-select', 'none');
+    document.body.style.setProperty('-moz-user-select', 'none');
+    document.body.style.setProperty('-ms-user-select', 'none');
+
+    // Prevent dragging
+    document.body.style.setProperty('-webkit-user-drag', 'none');
+
+    return () => {
+      // Remove event listeners
+      document.removeEventListener('keydown', handleKeyDown, options);
+      document.removeEventListener('keyup', handleKeyUp, options);
+      document.removeEventListener('keypress', handleKeyPress, options);
+      document.removeEventListener('mousedown', handleMouseDown, options);
+      document.removeEventListener('mouseup', handleMouseUp, options);
+      document.removeEventListener('click', handleClick, options);
+      document.removeEventListener('contextmenu', handleContextMenu, options);
+      document.removeEventListener('dblclick', handleDoubleClick, options);
+      document.removeEventListener('wheel', handleWheel, options);
+      document.removeEventListener('touchstart', handleTouchStart, options);
+      document.removeEventListener('touchend', handleTouchEnd, options);
+      document.removeEventListener('touchmove', handleTouchMove, options);
+
+      // Restore user selection
+      document.body.style.userSelect = '';
+      document.body.style.removeProperty('-webkit-user-select');
+      document.body.style.removeProperty('-moz-user-select');
+      document.body.style.removeProperty('-ms-user-select');
+      document.body.style.removeProperty('-webkit-user-drag');
+    };
+  }, [isViewingStream]);
+
   return (
     <div className={`student-view ${isViewingStream ? 'viewing-stream' : ''}`}>
       {!isViewingStream && (
