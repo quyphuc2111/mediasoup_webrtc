@@ -10,10 +10,9 @@ use core_foundation::runloop::CFRunLoop;
 
 #[cfg(target_os = "windows")]
 use windows::{
-    core::*,
     Win32::Foundation::*,
     Win32::UI::WindowsAndMessaging::*,
-    Win32::System::Threading::*,
+    Win32::System::LibraryLoader::GetModuleHandleW,
 };
 
 static INPUT_BLOCKED: Mutex<bool> = Mutex::new(false);
@@ -30,10 +29,14 @@ struct WindowsHooks {
     mouse: HHOOK,
 }
 
+// HHOOK is not Send, so we need to wrap it
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsHooks {}
+
 #[cfg(target_os = "windows")]
 static HOOK_HANDLES: Mutex<Option<WindowsHooks>> = Mutex::new(None);
 
-pub fn set_input_blocked(block: bool) -> Result<(), String> {
+pub fn set_input_blocked(block: bool) -> std::result::Result<(), String> {
     let mut blocked = INPUT_BLOCKED.lock().map_err(|e| e.to_string())?;
     
     if *blocked == block {
@@ -58,7 +61,7 @@ pub fn set_input_blocked(block: bool) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn start_event_tap() -> Result<(), String> {
+fn start_event_tap() -> std::result::Result<(), String> {
     if EVENT_TAP_ACTIVE.load(Ordering::Acquire) {
         return Ok(()); // Already running
     }
@@ -127,7 +130,7 @@ fn start_event_tap() -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn stop_event_tap() -> Result<(), String> {
+fn stop_event_tap() -> std::result::Result<(), String> {
     EVENT_TAP_ACTIVE.store(false, Ordering::Release);
     // Note: We can't actually disable the event tap here because we leaked it.
     // The event tap will continue to run but will check INPUT_BLOCKED and allow events through.
@@ -177,7 +180,7 @@ unsafe extern "system" fn low_level_mouse_proc(
 }
 
 #[cfg(target_os = "windows")]
-fn start_windows_hook() -> Result<(), String> {
+fn start_windows_hook() -> std::result::Result<(), String> {
     let mut hook_guard = HOOK_HANDLES.lock().map_err(|e| e.to_string())?;
     
     if hook_guard.is_some() {
@@ -220,17 +223,17 @@ fn start_windows_hook() -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn stop_windows_hook() -> Result<(), String> {
+fn stop_windows_hook() -> std::result::Result<(), String> {
     let mut hook_guard = HOOK_HANDLES.lock().map_err(|e| e.to_string())?;
     
     if let Some(hooks) = hook_guard.take() {
         unsafe {
-            UnhookWindowsHookEx(hooks.keyboard)
-                .ok()
-                .map_err(|e| format!("Failed to unhook keyboard: {:?}", e))?;
-            UnhookWindowsHookEx(hooks.mouse)
-                .ok()
-                .map_err(|e| format!("Failed to unhook mouse: {:?}", e))?;
+            if let Err(e) = UnhookWindowsHookEx(hooks.keyboard) {
+                return Err(format!("Failed to unhook keyboard: {:?}", e));
+            }
+            if let Err(e) = UnhookWindowsHookEx(hooks.mouse) {
+                return Err(format!("Failed to unhook mouse: {:?}", e));
+            }
         }
     }
     
