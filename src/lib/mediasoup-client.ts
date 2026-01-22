@@ -17,6 +17,10 @@ export interface MediasoupClientEvents {
   onPeerLeft: (peerId: string, wasTeacher: boolean) => void;
   onError: (error: string) => void;
   onStreamReady: (stream: MediaStream) => void;
+  onControl?: (action: string) => void;
+  onMouseControl?: (event: any) => void;
+  onKeyboardControl?: (event: any) => void;
+  onRequestScreenShare?: () => void;
 }
 
 export class MediasoupClient {
@@ -43,7 +47,6 @@ export class MediasoupClient {
     this.peerId = peerId;
     this.isTeacher = isTeacher;
 
-    // Check device support first
     // Check device support first
     let handlerName = detectDevice();
     if (!handlerName && (window as any).RTCPeerConnection) {
@@ -72,7 +75,6 @@ export class MediasoupClient {
             throw new Error('Server không trả về rtpCapabilities');
           }
 
-          // Load device with rtpCapabilities
           // Load device with rtpCapabilities
           this.device = new Device({ handlerName });
           await this.device.load({ routerRtpCapabilities: this.rtpCapabilities });
@@ -130,6 +132,22 @@ export class MediasoupClient {
         break;
       case 'error':
         this.events.onError?.(data.message);
+        break;
+      case 'control':
+        console.log('[MediasoupClient] Received control command from server:', data.action);
+        this.events.onControl?.(data.action);
+        break;
+      case 'mouseControl':
+        console.log('[MediasoupClient] Received mouse control from server:', data);
+        this.events.onMouseControl?.(data);
+        break;
+      case 'keyboardControl':
+        console.log('[MediasoupClient] Received keyboard control from server:', data);
+        this.events.onKeyboardControl?.(data);
+        break;
+      case 'requestScreenShare':
+        console.log('[MediasoupClient] Received screen share request from server');
+        this.events.onRequestScreenShare?.();
         break;
     }
   }
@@ -478,5 +496,54 @@ export class MediasoupClient {
     this.cleanup();
     this.ws?.close();
     this.ws = null;
+  }
+
+  sendControlCommand(studentId: string, action: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[MediasoupClient] Cannot send control command: WebSocket not connected');
+      this.events.onError?.('WebSocket chưa kết nối');
+      return;
+    }
+
+    console.log('[MediasoupClient] Sending control command for student:', studentId, 'action:', action);
+    const message = { type: 'controlStudent', data: { studentId, action } };
+    console.log('[MediasoupClient] Control message:', message);
+    this.ws.send(JSON.stringify(message));
+  }
+
+  sendMouseControl(studentId: string, event: any): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[MediasoupClient] Cannot send mouse control: WebSocket not connected');
+      this.events.onError?.('WebSocket chưa kết nối');
+      return;
+    }
+
+    console.log('[MediasoupClient] Sending mouse control for student:', studentId, 'event:', event);
+    const message = { type: 'controlMouse', data: { studentId, event } };
+    this.ws.send(JSON.stringify(message));
+  }
+
+  sendKeyboardControl(studentId: string, event: any): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[MediasoupClient] Cannot send keyboard control: WebSocket not connected');
+      this.events.onError?.('WebSocket chưa kết nối');
+      return;
+    }
+
+    console.log('[MediasoupClient] Sending keyboard control for student:', studentId, 'event:', event);
+    const message = { type: 'controlKeyboard', data: { studentId, event } };
+    this.ws.send(JSON.stringify(message));
+  }
+
+  requestStudentScreenShare(studentId: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('[MediasoupClient] Cannot request screen share: WebSocket not connected');
+      this.events.onError?.('WebSocket chưa kết nối');
+      return;
+    }
+
+    console.log('[MediasoupClient] Requesting screen share from student:', studentId);
+    const message = { type: 'requestStudentScreenShare', data: { studentId } };
+    this.ws.send(JSON.stringify(message));
   }
 }

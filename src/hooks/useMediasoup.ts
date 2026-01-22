@@ -72,6 +72,7 @@ export function useMediasoup() {
   const micProducerIdRef = useRef<string | null>(null);
   const [isPushToTalkActive, setIsPushToTalkActive] = useState(false);
   const [studentAudioStream, setStudentAudioStream] = useState<MediaStream | null>(null);
+  const [studentVideoStreams, setStudentVideoStreams] = useState<Map<string, MediaStream>>(new Map());
 
   const clientRef = useRef<MediasoupClient | null>(null);
 
@@ -163,9 +164,9 @@ export function useMediasoup() {
             setError(err instanceof Error ? err.message : `Failed to consume producer ${producerId}`);
           }
         } else {
-          // Teacher: consume student audio producers
-          if (kind === 'audio' && peerId && peerId !== client.peerId) {
-            console.log(`[Teacher] New student audio producer detected: ${producerId} from peer ${peerId}`);
+          // Teacher: consume student producers (audio or video for remote control)
+          if (peerId && peerId !== client.peerId) {
+            console.log(`[Teacher] New student ${kind} producer detected: ${producerId} from peer ${peerId}`);
             
             await new Promise(resolve => setTimeout(resolve, 100));
             
@@ -177,29 +178,108 @@ export function useMediasoup() {
             try {
               const consumer = await clientRef.current.consume(producerId);
               if (consumer) {
-                console.log(`[Teacher] ✅ Successfully consumed student audio producer ${producerId}`);
-                setStudentAudioStream(prev => {
-                  const stream = prev || new MediaStream();
-                  
-                  // Remove old track from same peer if exists
-                  const existingTracks = stream.getTracks();
-                  existingTracks.forEach(track => {
-                    stream.removeTrack(track);
-                    track.stop();
+                console.log(`[Teacher] ✅ Successfully consumed student ${kind} producer ${producerId}`);
+                
+                if (kind === 'audio') {
+                  setStudentAudioStream(prev => {
+                    const stream = prev || new MediaStream();
+                    // Remove old tracks
+                    const existingTracks = stream.getTracks();
+                    existingTracks.forEach(track => {
+                      stream.removeTrack(track);
+                      track.stop();
+                    });
+                    // Add new track
+                    stream.addTrack(consumer.track);
+                    return stream;
                   });
-                  
-                  // Add new track
-                  stream.addTrack(consumer.track);
-                  return stream;
-                });
+                } else if (kind === 'video') {
+                  // Store student video stream for remote control
+                  setStudentVideoStreams(prev => {
+                    const newMap = new Map(prev);
+                    const stream = newMap.get(peerId) || new MediaStream();
+                    // Remove old video tracks from this peer
+                    const existingVideoTracks = stream.getVideoTracks();
+                    existingVideoTracks.forEach(track => {
+                      stream.removeTrack(track);
+                      track.stop();
+                    });
+                    // Add new track
+                    stream.addTrack(consumer.track);
+                    newMap.set(peerId, stream);
+                    return newMap;
+                  });
+                }
               }
             } catch (err) {
-              console.error(`[Teacher] ❌ Error consuming student audio producer ${producerId}:`, err);
+              console.error(`[Teacher] ❌ Error consuming student ${kind} producer ${producerId}:`, err);
             }
           }
         }
       },
       onStreamReady: setRemoteStream,
+      onControl: async (action: string) => {
+        console.log('[useMediasoup] onControl called, action:', action, 'isTeacher:', isTeacher);
+        // Only handle control for students
+        if (!isTeacher) {
+          console.log('[useMediasoup] Student received control command:', action);
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            console.log('[useMediasoup] Calling control_computer command with action:', action);
+            const result = await invoke<string>('control_computer', { action });
+            console.log('[useMediasoup] ✅ Control command executed successfully:', result);
+          } catch (err) {
+            console.error('[useMediasoup] ❌ Failed to execute control command:', err);
+            setError('Không thể thực thi lệnh điều khiển. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
+          }
+        } else {
+          console.log('[useMediasoup] Teacher received control command (ignored)');
+        }
+      },
+      onMouseControl: async (event: any) => {
+        console.log('[useMediasoup] onMouseControl called, event:', event, 'isTeacher:', isTeacher);
+        if (!isTeacher) {
+          console.log('[useMediasoup] Student received mouse control event');
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            console.log('[useMediasoup] Calling control_mouse command');
+            const result = await invoke<string>('control_mouse', { event });
+            console.log('[useMediasoup] ✅ Mouse control executed successfully:', result);
+          } catch (err) {
+            console.error('[useMediasoup] ❌ Failed to execute mouse control:', err);
+            setError('Không thể điều khiển chuột. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
+          }
+        }
+      },
+      onKeyboardControl: async (event: any) => {
+        console.log('[useMediasoup] onKeyboardControl called, event:', event, 'isTeacher:', isTeacher);
+        if (!isTeacher) {
+          console.log('[useMediasoup] Student received keyboard control event');
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            console.log('[useMediasoup] Calling control_keyboard command');
+            const result = await invoke<string>('control_keyboard', { event });
+            console.log('[useMediasoup] ✅ Keyboard control executed successfully:', result);
+          } catch (err) {
+            console.error('[useMediasoup] ❌ Failed to execute keyboard control:', err);
+            setError('Không thể điều khiển bàn phím. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
+          }
+        }
+      },
+      onRequestScreenShare: async () => {
+        console.log('[useMediasoup] onRequestScreenShare called, isTeacher:', isTeacher);
+        if (!isTeacher) {
+          console.log('[useMediasoup] Student received screen share request');
+          // Automatically start screen sharing
+          try {
+            await startScreenShare(false); // Start without audio
+            console.log('[useMediasoup] ✅ Student started screen sharing for remote control');
+          } catch (err) {
+            console.error('[useMediasoup] ❌ Failed to start screen sharing:', err);
+            setError('Không thể chia sẻ màn hình. Lỗi: ' + (err instanceof Error ? err.message : String(err)));
+          }
+        }
+      },
     });
 
     clientRef.current = client;
@@ -556,6 +636,52 @@ export function useMediasoup() {
     setMicStream(null);
   }, [stopScreenShare, stopMicrophone]);
 
+  const controlStudent = useCallback((studentId: string, action: string) => {
+    console.log('[useMediasoup] controlStudent called with studentId:', studentId, 'action:', action);
+    console.log('[useMediasoup] clientRef.current:', clientRef.current ? 'exists' : 'null');
+    
+    if (clientRef.current) {
+      console.log('[useMediasoup] Calling sendControlCommand...');
+      clientRef.current.sendControlCommand(studentId, action);
+    } else {
+      console.error('[useMediasoup] clientRef.current is null, cannot send control command');
+      setError('Không thể gửi lệnh điều khiển: chưa kết nối');
+    }
+  }, []);
+
+  const controlMouse = useCallback((studentId: string, event: any) => {
+    console.log('[useMediasoup] controlMouse called with studentId:', studentId, 'event:', event);
+    
+    if (clientRef.current) {
+      clientRef.current.sendMouseControl(studentId, event);
+    } else {
+      console.error('[useMediasoup] clientRef.current is null, cannot send mouse control');
+      setError('Không thể gửi lệnh điều khiển chuột: chưa kết nối');
+    }
+  }, []);
+
+  const controlKeyboard = useCallback((studentId: string, event: any) => {
+    console.log('[useMediasoup] controlKeyboard called with studentId:', studentId, 'event:', event);
+    
+    if (clientRef.current) {
+      clientRef.current.sendKeyboardControl(studentId, event);
+    } else {
+      console.error('[useMediasoup] clientRef.current is null, cannot send keyboard control');
+      setError('Không thể gửi lệnh điều khiển bàn phím: chưa kết nối');
+    }
+  }, []);
+
+  const requestStudentScreenShare = useCallback((studentId: string) => {
+    console.log('[useMediasoup] requestStudentScreenShare called with studentId:', studentId);
+    
+    if (clientRef.current) {
+      clientRef.current.requestStudentScreenShare(studentId);
+    } else {
+      console.error('[useMediasoup] clientRef.current is null, cannot request screen share');
+      setError('Không thể yêu cầu chia sẻ màn hình: chưa kết nối');
+    }
+  }, []);
+
   return {
     connectionState,
     error,
@@ -575,5 +701,10 @@ export function useMediasoup() {
     enablePushToTalk,
     disablePushToTalk,
     initializeStudentMicrophone,
+    controlStudent,
+    controlMouse,
+    controlKeyboard,
+    requestStudentScreenShare,
+    studentVideoStreams,
   };
 }

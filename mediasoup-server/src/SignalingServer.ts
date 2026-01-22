@@ -96,6 +96,18 @@ export class SignalingServer {
       case 'getProducers':
         await this.handleGetProducers(ws);
         break;
+      case 'controlStudent':
+        await this.handleControlStudent(ws, data);
+        break;
+      case 'controlMouse':
+        await this.handleControlMouse(ws, data);
+        break;
+      case 'controlKeyboard':
+        await this.handleControlKeyboard(ws, data);
+        break;
+      case 'requestStudentScreenShare':
+        await this.handleRequestStudentScreenShare(ws, data);
+        break;
       default:
         console.warn('Unknown message type:', type);
     }
@@ -206,9 +218,10 @@ export class SignalingServer {
     const peer = room.getPeer(info.peerId);
     if (!peer || !peer.transport) return;
 
-    // Only teacher can produce video, but students can produce audio (push-to-talk)
-    if (!peer.isTeacher && data.kind === 'video') {
-      this.send(ws, { type: 'error', data: { message: 'Only teacher can share screen' } });
+    // Only teacher can produce video by default, but students can produce video if allowed (for remote control)
+    // Students can always produce audio (push-to-talk)
+    if (!peer.isTeacher && data.kind === 'video' && !peer.canShareScreen) {
+      this.send(ws, { type: 'error', data: { message: 'Only teacher can share screen. Request screen share permission from teacher.' } });
       return;
     }
 
@@ -243,6 +256,20 @@ export class SignalingServer {
         });
       }
       console.log(`Student ${peer.name} produced audio: ${producer.id}`);
+    } else if (data.kind === 'video' && !peer.isTeacher) {
+      // Student produced video (for remote control) - notify teacher only
+      const teacherWs = Array.from(this.clients.entries()).find(
+        ([_, clientInfo]) => clientInfo.roomId === info.roomId && 
+        room.getPeer(clientInfo.peerId)?.isTeacher
+      )?.[0];
+      
+      if (teacherWs) {
+        this.send(teacherWs, {
+          type: 'newProducer',
+          data: { producerId: producer.id, kind: data.kind, peerId: info.peerId },
+        });
+      }
+      console.log(`Student ${peer.name} produced video (for remote control): ${producer.id}`);
     }
   }
 
@@ -373,6 +400,150 @@ export class SignalingServer {
     }
 
     this.send(ws, { type: 'producers', data: producers });
+  }
+
+  private async handleControlStudent(ws: WebSocket, data: { studentId: string; action: string }): Promise<void> {
+    console.log('[SignalingServer] handleControlStudent called with data:', data);
+    const info = this.clients.get(ws);
+    if (!info) {
+      console.error('[SignalingServer] No client info found for WebSocket');
+      return;
+    }
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) {
+      console.error('[SignalingServer] Room not found:', info.roomId);
+      return;
+    }
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer || !peer.isTeacher) {
+      console.warn('[SignalingServer] Only teacher can control students. Peer:', peer);
+      this.send(ws, { type: 'error', data: { message: 'Only teacher can control students' } });
+      return;
+    }
+
+    const studentPeer = room.getPeer(data.studentId);
+    if (!studentPeer || studentPeer.isTeacher) {
+      console.warn('[SignalingServer] Student not found:', data.studentId);
+      this.send(ws, { type: 'error', data: { message: 'Student not found' } });
+      return;
+    }
+
+    // Find student's WebSocket connection
+    const studentWs = Array.from(this.clients.entries()).find(
+      ([_, clientInfo]) => clientInfo.roomId === info.roomId && clientInfo.peerId === data.studentId
+    )?.[0];
+
+    if (studentWs) {
+      // Send control command to student
+      console.log(`[SignalingServer] Sending control command "${data.action}" to student ${studentPeer.name} (${data.studentId})`);
+      this.send(studentWs, { type: 'control', data: { action: data.action } });
+      console.log(`[SignalingServer] ✅ Teacher ${peer.name} sent control command "${data.action}" to student ${studentPeer.name}`);
+    } else {
+      console.error('[SignalingServer] Student WebSocket connection not found for:', data.studentId);
+      this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
+    }
+  }
+
+  private async handleControlMouse(ws: WebSocket, data: { studentId: string; event: any }): Promise<void> {
+    console.log('[SignalingServer] handleControlMouse called with data:', data);
+    const info = this.clients.get(ws);
+    if (!info) return;
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) return;
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer || !peer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Only teacher can control students' } });
+      return;
+    }
+
+    const studentPeer = room.getPeer(data.studentId);
+    if (!studentPeer || studentPeer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Student not found' } });
+      return;
+    }
+
+    const studentWs = Array.from(this.clients.entries()).find(
+      ([_, clientInfo]) => clientInfo.roomId === info.roomId && clientInfo.peerId === data.studentId
+    )?.[0];
+
+    if (studentWs) {
+      this.send(studentWs, { type: 'mouseControl', data: data.event });
+      console.log(`[SignalingServer] ✅ Teacher sent mouse control to student ${studentPeer.name}`);
+    } else {
+      this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
+    }
+  }
+
+  private async handleControlKeyboard(ws: WebSocket, data: { studentId: string; event: any }): Promise<void> {
+    console.log('[SignalingServer] handleControlKeyboard called with data:', data);
+    const info = this.clients.get(ws);
+    if (!info) return;
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) return;
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer || !peer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Only teacher can control students' } });
+      return;
+    }
+
+    const studentPeer = room.getPeer(data.studentId);
+    if (!studentPeer || studentPeer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Student not found' } });
+      return;
+    }
+
+    const studentWs = Array.from(this.clients.entries()).find(
+      ([_, clientInfo]) => clientInfo.roomId === info.roomId && clientInfo.peerId === data.studentId
+    )?.[0];
+
+    if (studentWs) {
+      this.send(studentWs, { type: 'keyboardControl', data: data.event });
+      console.log(`[SignalingServer] ✅ Teacher sent keyboard control to student ${studentPeer.name}`);
+    } else {
+      this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
+    }
+  }
+
+  private async handleRequestStudentScreenShare(ws: WebSocket, data: { studentId: string }): Promise<void> {
+    console.log('[SignalingServer] handleRequestStudentScreenShare called with data:', data);
+    const info = this.clients.get(ws);
+    if (!info) return;
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) return;
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer || !peer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Only teacher can request student screen share' } });
+      return;
+    }
+
+    const studentPeer = room.getPeer(data.studentId);
+    if (!studentPeer || studentPeer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Student not found' } });
+      return;
+    }
+
+    // Allow student to share screen
+    studentPeer.canShareScreen = true;
+
+    // Notify student to start screen sharing
+    const studentWs = Array.from(this.clients.entries()).find(
+      ([_, clientInfo]) => clientInfo.roomId === info.roomId && clientInfo.peerId === data.studentId
+    )?.[0];
+
+    if (studentWs) {
+      this.send(studentWs, { type: 'requestScreenShare', data: {} });
+      console.log(`[SignalingServer] ✅ Teacher requested screen share from student ${studentPeer.name}`);
+    } else {
+      this.send(ws, { type: 'error', data: { message: 'Student connection not found' } });
+    }
   }
 
   private handleDisconnect(ws: WebSocket): void {

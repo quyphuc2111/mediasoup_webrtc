@@ -15,6 +15,7 @@ export interface Peer {
   recvTransport?: WebRtcTransport;
   producers: Map<string, Producer>;
   consumers: Map<string, Consumer>;
+  canShareScreen?: boolean; // Allow student to share screen for remote control
 }
 
 export class Room {
@@ -53,6 +54,7 @@ export class Room {
       isTeacher,
       producers: new Map(),
       consumers: new Map(),
+      canShareScreen: false,
     };
     
     this.peers.set(id, peer);
