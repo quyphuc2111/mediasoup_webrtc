@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use tauri::{State, Manager, AppHandle};
 use serde::{Deserialize, Serialize};
 
+#[cfg(target_os = "macos")]
+mod input_blocker;
+
 #[derive(Default)]
 pub struct ServerState {
     process: Mutex<Option<Child>>,
@@ -273,6 +276,11 @@ fn get_server_info(state: State<ServerState>) -> Result<ServerInfo, String> {
     info_guard.clone().ok_or_else(|| "Server not running".to_string())
 }
 
+#[tauri::command]
+fn block_input(block: bool) -> Result<(), String> {
+    input_blocker::set_input_blocked(block)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -281,7 +289,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
-            get_server_info
+            get_server_info,
+            block_input
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

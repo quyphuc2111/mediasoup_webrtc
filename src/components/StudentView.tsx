@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { useMediasoup } from '../hooks/useMediasoup';
 import { VideoPlayer } from './VideoPlayer';
 
@@ -117,7 +118,19 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
 
   // Block all keyboard and mouse interactions when viewing stream
   useEffect(() => {
-    if (!isViewingStream) return;
+    if (!isViewingStream) {
+      // Unblock input when not viewing stream
+      invoke('block_input', { block: false }).catch(err => {
+        console.warn('[StudentView] Failed to unblock input:', err);
+      });
+      return;
+    }
+
+    // Block input at system level using Tauri command
+    invoke('block_input', { block: true }).catch(err => {
+      console.warn('[StudentView] Failed to block input at system level:', err);
+      console.warn('[StudentView] Falling back to JavaScript blocking');
+    });
 
     // Block all keyboard events
     const handleKeyDown = (e: KeyboardEvent) => {
