@@ -567,3 +567,21 @@ h1 {
 .student-audio {
   background: var(--bg);
 }
+
+/* Remote Control View */
+.remote-control-video {
+  width: 100%;
+  height: 100%;
+}
+
+.remote-control-video .video-container {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.remote-control-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { VideoPlayer } from './VideoPlayer';
 
 interface RemoteControlViewProps {
@@ -11,7 +11,6 @@ interface RemoteControlViewProps {
 }
 
 export function RemoteControlView({
-  studentId,
   studentName,
   studentStream,
   onMouseControl,
@@ -147,16 +146,13 @@ export function RemoteControlView({
         tabIndex={0}
       >
         {studentStream ? (
-          <VideoPlayer
-            stream={studentStream}
-            muted={false}
-            className="remote-control-video"
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'contain',
-            }}
-          />
+          <div style={{ width: '100%', height: '100%' }}>
+            <VideoPlayer
+              stream={studentStream}
+              muted={false}
+              className="remote-control-video"
+            />
+          </div>
         ) : (
           <div style={{
             display: 'flex',
