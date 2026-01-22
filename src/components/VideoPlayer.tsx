@@ -5,9 +5,10 @@ interface VideoPlayerProps {
   muted?: boolean;
   className?: string;
   label?: string;
+  disableInteraction?: boolean;
 }
 
-export function VideoPlayer({ stream, muted = false, className = '', label }: VideoPlayerProps) {
+export function VideoPlayer({ stream, muted = false, className = '', label, disableInteraction = false }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -17,7 +18,7 @@ export function VideoPlayer({ stream, muted = false, className = '', label }: Vi
   }, [stream]);
 
   return (
-    <div className={`video-container ${className}`}>
+    <div className={`video-container ${className} ${disableInteraction ? 'no-interaction' : ''}`}>
       {label && <div className="video-label">{label}</div>}
       <video
         ref={videoRef}
@@ -29,9 +30,10 @@ export function VideoPlayer({ stream, muted = false, className = '', label }: Vi
           height: '100%',
           objectFit: 'contain',
           backgroundColor: '#1a1a1a',
-          borderRadius: '8px',
+          borderRadius: disableInteraction ? '0' : '8px',
         }}
       />
+      {disableInteraction && <div className="interaction-blocker" />}
       {!stream && (
         <div className="video-placeholder">
           <span>Đang chờ stream...</span>

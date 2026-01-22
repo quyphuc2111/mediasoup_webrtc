@@ -325,7 +325,22 @@ export function useMediasoup() {
         console.warn('  - macOS chưa cấp quyền Screen Recording');
         console.warn('  - Trình duyệt/WebView không hỗ trợ system audio capture');
         console.warn('  - Người dùng chưa chọn "Share system audio" trong dialog');
-        setError('⚠️ Âm thanh hệ thống không được capture. Vui lòng đảm bảo đã chọn "Share system audio" trong hộp thoại chia sẻ màn hình.');
+        
+        // Hiển thị warning nhưng vẫn tiếp tục chia sẻ màn hình
+        // Người dùng có thể dùng microphone riêng nếu cần
+        const warningMsg = '⚠️ Âm thanh hệ thống không được capture.\n\n' +
+          'Cách khắc phục trên macOS:\n' +
+          '1. Khi hộp thoại chia sẻ màn hình xuất hiện, đảm bảo đã tích vào "Share system audio"\n' +
+          '2. Kiểm tra System Settings > Privacy & Security > Screen Recording - đảm bảo ứng dụng có quyền\n' +
+          '3. Nếu vẫn không được, bạn có thể dùng nút "Bật Microphone" để chia sẻ âm thanh từ microphone\n\n' +
+          'Màn hình vẫn được chia sẻ bình thường.';
+        
+        setError(warningMsg);
+        
+        // Tự động clear error sau 10 giây để không làm phiền người dùng
+        setTimeout(() => {
+          setError(null);
+        }, 10000);
       } else if (audioTracks.length > 0) {
         console.log('[ScreenShare] ✅ Audio track được capture:', {
           id: audioTracks[0].id,

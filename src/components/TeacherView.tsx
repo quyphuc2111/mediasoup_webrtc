@@ -50,7 +50,13 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
         </div>
       </div>
 
-      {error && <div className="error-message">❌ {error}</div>}
+      {error && (
+        <div className={`error-message ${error.startsWith('⚠️') ? 'warning-message' : ''}`}>
+          {error.split('\n').map((line, i) => (
+            <div key={i}>{line || '\u00A0'}</div>
+          ))}
+        </div>
+      )}
 
       <div className="preview-section">
         <VideoPlayer 

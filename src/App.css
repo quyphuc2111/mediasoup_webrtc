@@ -275,6 +275,14 @@ h1 {
   padding: 1rem;
   border-radius: 8px;
   margin-bottom: 1rem;
+  white-space: pre-line;
+  line-height: 1.6;
+}
+
+.error-message.warning-message {
+  background: rgba(245, 158, 11, 0.2);
+  color: var(--warning);
+  border: 1px solid var(--warning);
 }
 
 /* Video */
@@ -318,6 +326,137 @@ h1 {
 .main-video {
   height: calc(100vh - 250px);
   min-height: 400px;
+}
+
+/* Fullscreen viewing mode for students */
+.student-view.viewing-stream {
+  padding: 0;
+  overflow: hidden;
+}
+
+.student-view.viewing-stream .video-section {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.student-view.viewing-stream .video-container.main-video {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: unset;
+  border-radius: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Fullscreen API styles */
+.student-view.viewing-stream .video-section:fullscreen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.student-view.viewing-stream .video-section:-webkit-full-screen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.student-view.viewing-stream .video-section:-moz-full-screen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.student-view.viewing-stream .video-section:-ms-fullscreen {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.student-view.viewing-stream .video-container.no-interaction video {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+.interaction-blocker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* Stream overlay controls */
+.stream-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.stream-controls-overlay {
+  display: flex;
+  gap: 1rem;
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.stream-overlay:hover .stream-controls-overlay,
+.stream-controls-overlay:focus-within {
+  opacity: 1;
+}
+
+.btn.push-to-talk-overlay,
+.btn.danger-overlay {
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  min-width: 150px;
+}
+
+.btn.push-to-talk-overlay:hover,
+.btn.danger-overlay:hover {
+  background: rgba(0, 0, 0, 0.9);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.btn.push-to-talk-overlay.active {
+  background: rgba(239, 68, 68, 0.9);
+  border-color: var(--danger);
+}
+
+.btn.danger-overlay {
+  background: rgba(239, 68, 68, 0.8);
+  border-color: var(--danger);
 }
 
 /* Controls */
