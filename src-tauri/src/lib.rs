@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use tauri::{State, Manager, AppHandle};
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "macos")]
 mod input_blocker;
 
 #[derive(Default)]

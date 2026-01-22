@@ -19,7 +19,10 @@ use windows::{
 static INPUT_BLOCKED: Mutex<bool> = Mutex::new(false);
 
 #[cfg(target_os = "macos")]
-static EVENT_TAP: Mutex<Option<CGEventTap>> = Mutex::new(None);
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "macos")]
+static EVENT_TAP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 struct WindowsHooks {
@@ -56,9 +59,7 @@ pub fn set_input_blocked(block: bool) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn start_event_tap() -> Result<(), String> {
-    let mut tap_guard = EVENT_TAP.lock().map_err(|e| e.to_string())?;
-    
-    if tap_guard.is_some() {
+    if EVENT_TAP_ACTIVE.load(Ordering::Acquire) {
         return Ok(()); // Already running
     }
     
@@ -84,11 +85,11 @@ fn start_event_tap() -> Result<(), String> {
             // Check if input is blocked
             let blocked = match INPUT_BLOCKED.lock() {
                 Ok(guard) => *guard,
-                Err(_) => return Some(event), // If lock fails, allow event
+                Err(_) => return Some(event.clone()), // If lock fails, allow event
             };
             
             if !blocked {
-                return Some(event); // Pass through if not blocked
+                return Some(event.clone()); // Pass through if not blocked
             }
             
             // Block all keyboard and mouse events
@@ -107,7 +108,7 @@ fn start_event_tap() -> Result<(), String> {
                     // Return None to block the event
                     None
                 }
-                _ => Some(event), // Allow other events
+                _ => Some(event.clone()), // Allow other events
             }
         },
     )
@@ -116,27 +117,20 @@ fn start_event_tap() -> Result<(), String> {
     // Enable the event tap
     event_tap.enable();
     
-    *tap_guard = Some(event_tap);
+    EVENT_TAP_ACTIVE.store(true, Ordering::Release);
     
-    // Run event loop in a separate thread
-    std::thread::spawn(|| {
-        let run_loop = unsafe { CFRunLoop::get_current() };
-        unsafe {
-            CFRunLoop::run_current();
-        }
-    });
+    // Leak the event tap to keep it alive for the lifetime of the application
+    // The event tap will work with the existing run loop (Tauri's main thread)
+    Box::leak(Box::new(event_tap));
     
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn stop_event_tap() -> Result<(), String> {
-    let mut tap_guard = EVENT_TAP.lock().map_err(|e| e.to_string())?;
-    
-    if let Some(tap) = tap_guard.take() {
-        tap.disable();
-    }
-    
+    EVENT_TAP_ACTIVE.store(false, Ordering::Release);
+    // Note: We can't actually disable the event tap here because we leaked it.
+    // The event tap will continue to run but will check INPUT_BLOCKED and allow events through.
     Ok(())
 }
 
