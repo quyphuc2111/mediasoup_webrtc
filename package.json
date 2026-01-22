@@ -22,7 +22,8 @@
     "build:all:intel": "npm run build:teacher:intel && npm run build:student-app:intel",
     "server:install": "cd mediasoup-server && npm install",
     "server:dev": "cd mediasoup-server && npm run dev",
-    "server:build": "cd mediasoup-server && npm run build"
+    "server:build": "cd mediasoup-server && npm run build",
+    "rename:rules": "node scripts/rename-md-to-mdc.js"
   },
   "dependencies": {
     "react": "^19.1.0",

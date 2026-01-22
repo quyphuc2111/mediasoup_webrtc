@@ -206,8 +206,8 @@ export class SignalingServer {
     const peer = room.getPeer(info.peerId);
     if (!peer || !peer.transport) return;
 
-    // Only teacher can produce
-    if (!peer.isTeacher) {
+    // Only teacher can produce video, but students can produce audio (push-to-talk)
+    if (!peer.isTeacher && data.kind === 'video') {
       this.send(ws, { type: 'error', data: { message: 'Only teacher can share screen' } });
       return;
     }
@@ -220,13 +220,30 @@ export class SignalingServer {
       data: { producerId: producer.id, kind: data.kind },
     });
 
-    // Notify students about new producer
-    this.broadcast(info.roomId, {
-      type: 'newProducer',
-      data: { producerId: producer.id, kind: data.kind, peerId: info.peerId },
-    }, ws);
-
-    console.log(`Teacher produced ${data.kind}: ${producer.id}`);
+    // Notify others about new producer
+    // If teacher produces, notify students. If student produces audio, notify teacher.
+    if (peer.isTeacher) {
+      // Teacher produced - notify all students
+      this.broadcast(info.roomId, {
+        type: 'newProducer',
+        data: { producerId: producer.id, kind: data.kind, peerId: info.peerId },
+      }, ws);
+      console.log(`Teacher produced ${data.kind}: ${producer.id}`);
+    } else if (data.kind === 'audio') {
+      // Student produced audio - notify teacher only
+      const teacherWs = Array.from(this.clients.entries()).find(
+        ([_, clientInfo]) => clientInfo.roomId === info.roomId && 
+        room.getPeer(clientInfo.peerId)?.isTeacher
+      )?.[0];
+      
+      if (teacherWs) {
+        this.send(teacherWs, {
+          type: 'newProducer',
+          data: { producerId: producer.id, kind: data.kind, peerId: info.peerId },
+        });
+      }
+      console.log(`Student ${peer.name} produced audio: ${producer.id}`);
+    }
   }
 
   private async handleConsume(ws: WebSocket, data: { producerId: string; rtpCapabilities: RtpCapabilities }): Promise<void> {
@@ -239,17 +256,30 @@ export class SignalingServer {
     const peer = room.getPeer(info.peerId);
     if (!peer || !peer.recvTransport) return;
 
-    // Find producer (from teacher)
-    let producer = null;
-    for (const p of room.teacherProducers) {
-      if (p.id === data.producerId) {
-        producer = p;
-        break;
-      }
+    // Find producer - can be from teacher (for students) or from students (for teacher)
+    const producerInfo = room.findProducer(data.producerId);
+    if (!producerInfo) {
+      this.send(ws, { type: 'error', data: { message: 'Producer not found' } });
+      return;
     }
 
-    if (!producer) {
-      this.send(ws, { type: 'error', data: { message: 'Producer not found' } });
+    const { producer, peer: producerPeer } = producerInfo;
+
+    // Students can only consume from teacher
+    // Teacher can consume from students (audio only)
+    if (!peer.isTeacher && !producerPeer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Students can only consume from teacher' } });
+      return;
+    }
+
+    // Teacher can only consume audio from students
+    if (peer.isTeacher && producerPeer.isTeacher) {
+      this.send(ws, { type: 'error', data: { message: 'Teacher cannot consume from self' } });
+      return;
+    }
+
+    if (peer.isTeacher && producer.kind !== 'audio') {
+      this.send(ws, { type: 'error', data: { message: 'Teacher can only consume audio from students' } });
       return;
     }
 
@@ -302,10 +332,45 @@ export class SignalingServer {
     const room = this.manager.getRoom(info.roomId);
     if (!room) return;
 
-    const producers = room.teacherProducers.map(p => ({
-      producerId: p.id,
-      kind: p.kind,
-    }));
+    const peer = room.getPeer(info.peerId);
+    if (!peer) return;
+
+    const producers: Array<{ producerId: string; kind: MediaKind; peerId: string }> = [];
+
+    if (peer.isTeacher) {
+      // Teacher gets all producers: teacher's own + student audio
+      // Add teacher's own producers
+      for (const p of room.teacherProducers) {
+        producers.push({
+          producerId: p.id,
+          kind: p.kind,
+          peerId: info.peerId,
+        });
+      }
+      // Add student audio producers
+      for (const student of room.getStudents()) {
+        for (const p of student.producers.values()) {
+          if (p.kind === 'audio') {
+            producers.push({
+              producerId: p.id,
+              kind: p.kind,
+              peerId: student.id,
+            });
+          }
+        }
+      }
+    } else {
+      // Students only get teacher's producers
+      const teacherPeer = room.getAllPeers().find(p => p.isTeacher);
+      const teacherId = teacherPeer?.id || '';
+      for (const p of room.teacherProducers) {
+        producers.push({
+          producerId: p.id,
+          kind: p.kind,
+          peerId: teacherId,
+        });
+      }
+    }
 
     this.send(ws, { type: 'producers', data: producers });
   }

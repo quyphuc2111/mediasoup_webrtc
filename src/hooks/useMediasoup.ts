@@ -70,6 +70,8 @@ export function useMediasoup() {
   const [isMicActive, setIsMicActive] = useState(false);
   const [micStream, setMicStream] = useState<MediaStream | null>(null);
   const micProducerIdRef = useRef<string | null>(null);
+  const [isPushToTalkActive, setIsPushToTalkActive] = useState(false);
+  const [studentAudioStream, setStudentAudioStream] = useState<MediaStream | null>(null);
 
   const clientRef = useRef<MediasoupClient | null>(null);
 
@@ -118,8 +120,8 @@ export function useMediasoup() {
           setRemoteStream(null);
         }
       },
-      onNewProducer: async (producerId: string, kind: MediaKind) => {
-        // Auto-consume new producers (for students)
+      onNewProducer: async (producerId: string, kind: MediaKind, peerId?: string) => {
+        // Students: consume teacher's producers (video + audio)
         if (!client.isTeacher) {
           console.log(`[Student] New producer detected: ${producerId}, kind: ${kind}`);
           console.log(`[Student] Client connection state: ${clientRef.current ? 'exists' : 'null'}`);
@@ -160,6 +162,41 @@ export function useMediasoup() {
             console.error(`[Student] ❌ Error consuming producer ${producerId}:`, err);
             setError(err instanceof Error ? err.message : `Failed to consume producer ${producerId}`);
           }
+        } else {
+          // Teacher: consume student audio producers
+          if (kind === 'audio' && peerId && peerId !== client.peerId) {
+            console.log(`[Teacher] New student audio producer detected: ${producerId} from peer ${peerId}`);
+            
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            if (!clientRef.current) {
+              console.error(`[Teacher] ❌ Client is null, cannot consume producer ${producerId}`);
+              return;
+            }
+            
+            try {
+              const consumer = await clientRef.current.consume(producerId);
+              if (consumer) {
+                console.log(`[Teacher] ✅ Successfully consumed student audio producer ${producerId}`);
+                setStudentAudioStream(prev => {
+                  const stream = prev || new MediaStream();
+                  
+                  // Remove old track from same peer if exists
+                  const existingTracks = stream.getTracks();
+                  existingTracks.forEach(track => {
+                    stream.removeTrack(track);
+                    track.stop();
+                  });
+                  
+                  // Add new track
+                  stream.addTrack(consumer.track);
+                  return stream;
+                });
+              }
+            } catch (err) {
+              console.error(`[Teacher] ❌ Error consuming student audio producer ${producerId}:`, err);
+            }
+          }
         }
       },
       onStreamReady: setRemoteStream,
@@ -184,10 +221,26 @@ export function useMediasoup() {
           } else {
             console.log('[Student] No producers yet, waiting for teacher to share...');
           }
+          
+          // Initialize microphone for push-to-talk
+          setTimeout(() => {
+            initializeStudentMicrophone();
+          }, 1000);
         } catch (consumeErr) {
           // Không có producer nào - teacher chưa share, không phải lỗi
           console.log('[Student] No producers yet or error consuming:', consumeErr);
           setError(consumeErr instanceof Error ? consumeErr.message : 'Failed to consume producers');
+        }
+      } else {
+        // Teacher: consume existing student audio producers
+        try {
+          const stream = await client.consumeAll();
+          if (stream && stream.getAudioTracks().length > 0) {
+            setStudentAudioStream(stream);
+            console.log('[Teacher] ✅ Student audio stream set');
+          }
+        } catch (err) {
+          console.log('[Teacher] No student audio producers yet');
         }
       }
     } catch (err) {
@@ -355,6 +408,12 @@ export function useMediasoup() {
       if (producerId) {
         micProducerIdRef.current = producerId;
         console.log('[Microphone] Microphone producer ID:', producerId);
+        
+        // For students: disable track initially (push-to-talk mode)
+        if (!clientRef.current.isTeacher) {
+          clientRef.current.disableProducerTrack(producerId);
+          console.log('[Microphone] Student microphone disabled (push-to-talk mode)');
+        }
       }
     } catch (err) {
       console.error('[Microphone] ❌ Error accessing microphone:', err);
@@ -382,6 +441,71 @@ export function useMediasoup() {
       
       setError(errorMessage);
     }
+  }, []);
+
+  // Initialize microphone for students (for push-to-talk)
+  const initializeStudentMicrophone = useCallback(async () => {
+    if (!clientRef.current || clientRef.current.isTeacher) return;
+    if (micStream || micProducerIdRef.current) return; // Already initialized
+
+    try {
+      const nav = typeof navigator !== 'undefined' ? navigator : (window as any).navigator;
+      if (!nav || !nav.mediaDevices || typeof nav.mediaDevices.getUserMedia !== 'function') {
+        return; // Silently fail - will show error when user tries to use push-to-talk
+      }
+
+      const mediaDevices = nav.mediaDevices;
+      const newMicStream = await mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: { ideal: 48000 },
+          channelCount: { ideal: 1 },
+        },
+        video: false,
+      });
+
+      setMicStream(newMicStream);
+      
+      // Produce microphone but disable track initially
+      const producerId = await clientRef.current.produceMicrophone(newMicStream);
+      if (producerId) {
+        micProducerIdRef.current = producerId;
+        clientRef.current.disableProducerTrack(producerId);
+        console.log('[Student] Microphone initialized for push-to-talk (disabled)');
+      }
+    } catch (err) {
+      console.warn('[Student] Could not initialize microphone:', err);
+      // Don't set error - user will see it when they try to use push-to-talk
+    }
+  }, []);
+
+  const enablePushToTalk = useCallback(async () => {
+    if (!clientRef.current) return;
+    
+    if (!micProducerIdRef.current) {
+      // Try to initialize if not already done
+      await initializeStudentMicrophone();
+      // Wait a bit for producer to be created
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    if (micProducerIdRef.current && clientRef.current) {
+      clientRef.current.enableProducerTrack(micProducerIdRef.current);
+      setIsPushToTalkActive(true);
+      console.log('[PushToTalk] ✅ Enabled');
+    } else {
+      setError('Không thể kích hoạt microphone. Vui lòng kiểm tra quyền truy cập microphone.');
+    }
+  }, [initializeStudentMicrophone]);
+
+  const disablePushToTalk = useCallback(() => {
+    if (!clientRef.current || !micProducerIdRef.current) return;
+
+    clientRef.current.disableProducerTrack(micProducerIdRef.current);
+    setIsPushToTalkActive(false);
+    console.log('[PushToTalk] ❌ Disabled');
   }, []);
 
   const stopMicrophone = useCallback(() => {
@@ -425,11 +549,16 @@ export function useMediasoup() {
     localStream,
     isSharing,
     isMicActive,
+    isPushToTalkActive,
+    studentAudioStream,
     connect,
     disconnect,
     startScreenShare,
     startMicrophone,
     stopScreenShare,
     stopMicrophone,
+    enablePushToTalk,
+    disablePushToTalk,
+    initializeStudentMicrophone,
   };
 }

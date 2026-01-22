@@ -13,8 +13,11 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
     connectionState,
     error,
     remoteStream,
+    isPushToTalkActive,
     connect,
     disconnect,
+    enablePushToTalk,
+    disablePushToTalk,
   } = useMediasoup();
 
   const handleConnect = async () => {
@@ -57,10 +60,28 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
           </button>
         )}
 
-        {connectionState !== 'disconnected' && (
-          <button onClick={handleDisconnect} className="btn danger">
-            🚪 Rời lớp
-          </button>
+        {connectionState === 'connected' && (
+          <>
+            <button
+              onMouseDown={enablePushToTalk}
+              onMouseUp={disablePushToTalk}
+              onMouseLeave={disablePushToTalk}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                enablePushToTalk();
+              }}
+              onTouchEnd={(e) => {
+                e.preventDefault();
+                disablePushToTalk();
+              }}
+              className={`btn push-to-talk ${isPushToTalkActive ? 'active' : ''}`}
+            >
+              {isPushToTalkActive ? '🎤 Đang nói...' : '🎤 Nhấn để nói'}
+            </button>
+            <button onClick={handleDisconnect} className="btn danger">
+              🚪 Rời lớp
+            </button>
+          </>
         )}
       </div>
 

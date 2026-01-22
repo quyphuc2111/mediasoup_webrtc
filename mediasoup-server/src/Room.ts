@@ -103,6 +103,16 @@ export class Room {
     return this.getAllPeers().filter(p => !p.isTeacher);
   }
 
+  findProducer(producerId: string): { producer: Producer; peer: Peer } | null {
+    for (const peer of this.peers.values()) {
+      const producer = peer.producers.get(producerId);
+      if (producer) {
+        return { producer, peer };
+      }
+    }
+    return null;
+  }
+
   isEmpty(): boolean {
     return this.peers.size === 0;
   }

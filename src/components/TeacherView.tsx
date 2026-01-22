@@ -16,6 +16,7 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     localStream,
     isSharing,
     isMicActive,
+    studentAudioStream,
     connect,
     disconnect,
     startScreenShare,
@@ -59,6 +60,17 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
           className="preview-video"
         />
       </div>
+
+      {studentAudioStream && (
+        <div className="student-audio-section">
+          <VideoPlayer 
+            stream={studentAudioStream} 
+            muted={false} 
+            label="Âm thanh học sinh"
+            className="student-audio"
+          />
+        </div>
+      )}
 
       <div className="controls">
         {connectionState === 'disconnected' && (

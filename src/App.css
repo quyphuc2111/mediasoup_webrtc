@@ -383,3 +383,48 @@ h1 {
   padding: 1rem;
   font-size: 1.2rem;
 }
+
+/* Push to Talk button */
+.btn.push-to-talk {
+  background: var(--bg-secondary);
+  color: var(--text);
+  border: 2px solid var(--border);
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  min-width: 200px;
+  transition: all 0.2s;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.btn.push-to-talk:active,
+.btn.push-to-talk.active {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+  transform: scale(0.98);
+}
+
+.btn.push-to-talk:hover:not(:active):not(.active) {
+  background: var(--border);
+  border-color: var(--primary);
+}
+
+/* Student audio section */
+.student-audio-section {
+  margin-bottom: 1rem;
+  background: var(--bg-secondary);
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.student-audio-section .video-container {
+  max-height: 100px;
+  aspect-ratio: 16/9;
+}
+
+.student-audio {
+  background: var(--bg);
+}

@@ -11,7 +11,7 @@ export type MediaKind = 'audio' | 'video';
 
 export interface MediasoupClientEvents {
   onConnectionStateChange: (state: ConnectionState) => void;
-  onNewProducer: (producerId: string, kind: MediaKind) => void;
+  onNewProducer: (producerId: string, kind: MediaKind, peerId?: string) => void;
   onProducerClosed: (producerId: string) => void;
   onPeerJoined: (peerId: string, name: string, isTeacher: boolean) => void;
   onPeerLeft: (peerId: string, wasTeacher: boolean) => void;
@@ -117,7 +117,7 @@ export class MediasoupClient {
     // Handle server-pushed events
     switch (type) {
       case 'newProducer':
-        this.events.onNewProducer?.(data.producerId, data.kind);
+        this.events.onNewProducer?.(data.producerId, data.kind, data.peerId);
         break;
       case 'peerJoined':
         this.events.onPeerJoined?.(data.peerId, data.name, data.isTeacher);
@@ -336,8 +336,10 @@ export class MediasoupClient {
 
     if (Array.isArray(producers) && producers.length > 0) {
       console.log(`[MediasoupClient] Consuming ${producers.length} producers...`);
-      for (const { producerId } of producers) {
-        console.log(`[MediasoupClient] Consuming producer: ${producerId}`);
+      for (const producerInfo of producers) {
+        const producerId = producerInfo.producerId || producerInfo;
+        const peerId = producerInfo.peerId;
+        console.log(`[MediasoupClient] Consuming producer: ${producerId}${peerId ? ` from peer ${peerId}` : ''}`);
         try {
           const consumer = await this.consume(producerId);
           if (consumer) {
@@ -432,6 +434,26 @@ export class MediasoupClient {
       console.log('[MediasoupClient] Stopped producer:', producerId);
     } else {
       console.warn('[MediasoupClient] Producer not found:', producerId);
+    }
+  }
+
+  enableProducerTrack(producerId: string): void {
+    const producer = this.producers.get(producerId);
+    if (producer && producer.track) {
+      producer.track.enabled = true;
+      console.log('[MediasoupClient] Enabled producer track:', producerId);
+    } else {
+      console.warn('[MediasoupClient] Producer not found or has no track:', producerId);
+    }
+  }
+
+  disableProducerTrack(producerId: string): void {
+    const producer = this.producers.get(producerId);
+    if (producer && producer.track) {
+      producer.track.enabled = false;
+      console.log('[MediasoupClient] Disabled producer track:', producerId);
+    } else {
+      console.warn('[MediasoupClient] Producer not found or has no track:', producerId);
     }
   }
 
