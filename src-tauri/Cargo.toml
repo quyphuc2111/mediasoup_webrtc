@@ -33,4 +33,14 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+async-std = "1"
+bincode = "1"
+ipnetwork = "0.20"
+dirs = "5"
+# Audio capture - similar to RustDesk
+cpal = { git = "https://github.com/rustdesk-org/cpal", branch = "osx-screencapturekit" }
+dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"] }
+log = "0.4"
 

@@ -1,6 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMediasoup } from '../hooks/useMediasoup';
+import { useUdpAudio } from '../hooks/useUdpAudio';
 import { VideoPlayer } from './VideoPlayer';
+import { LanDiscovery } from './LanDiscovery';
+import { DebugPanel } from './DebugPanel';
 
 interface StudentViewProps {
   serverUrl: string;
@@ -10,6 +13,9 @@ interface StudentViewProps {
 }
 
 export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentViewProps) {
+  const [audioMode, setAudioMode] = useState<'webrtc' | 'udp'>('webrtc');
+  const [showLanDiscovery, setShowLanDiscovery] = useState(false);
+
   const {
     connectionState,
     error,
@@ -20,6 +26,25 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
     enablePushToTalk,
     disablePushToTalk,
   } = useMediasoup();
+
+  const {
+    isClientConnected,
+    clientIp,
+    connectToDevice,
+    disconnectFromDevice,
+    startDiscoveryListener,
+    error: udpError,
+  } = useUdpAudio();
+
+  // Tự động start discovery listener khi vào lớp học (nếu đã chọn UDP mode)
+  useEffect(() => {
+    if (audioMode === 'udp' && connectionState === 'connected') {
+      // Tự động start listener khi đã kết nối vào lớp và đang ở UDP mode
+      startDiscoveryListener(name, 5000).catch(err => {
+        console.error('[Student] Auto-start discovery listener failed:', err);
+      });
+    }
+  }, [audioMode, connectionState, name, startDiscoveryListener]);
 
   const handleConnect = async () => {
     await connect(serverUrl, roomId, name, false);
@@ -130,7 +155,71 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
             </div>
           </div>
 
-          {error && <div className="error-message">❌ {error}</div>}
+          {(error || udpError) && (
+            <div className="error-message">❌ {error || udpError}</div>
+          )}
+
+          <div className="audio-mode-selector">
+            <label>Chế độ Audio:</label>
+            <select
+              value={audioMode}
+              onChange={async (e) => {
+                const newMode = e.target.value as 'webrtc' | 'udp';
+                setAudioMode(newMode);
+                if (newMode === 'udp') {
+                  // Tự động start discovery listener khi chọn UDP mode
+                  try {
+                    await startDiscoveryListener(name, 5000);
+                    console.log('[Student] Discovery listener started for UDP mode');
+                  } catch (err) {
+                    console.error('[Student] Failed to start discovery listener:', err);
+                  }
+                }
+              }}
+              className="mode-select"
+            >
+              <option value="webrtc">WebRTC (Mặc định)</option>
+              <option value="udp">UDP Streaming</option>
+            </select>
+            {audioMode === 'udp' && (
+              <>
+                <button
+                  onClick={() => setShowLanDiscovery(!showLanDiscovery)}
+                  className="btn secondary"
+                >
+                  {showLanDiscovery ? 'Ẩn' : 'Hiện'} LAN Discovery
+                </button>
+                {connectionState === 'connected' ? (
+                  <span className="listener-status" style={{ color: 'var(--success)', fontSize: '0.9rem' }}>
+                    🟢 Listener đang chạy (tự động khi vào lớp)
+                  </span>
+                ) : (
+                  <span className="listener-status" style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    ⏳ Sẽ tự động start khi vào lớp
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+
+          {audioMode === 'udp' && showLanDiscovery && (
+            <div className="lan-discovery-section">
+              <LanDiscovery
+                onDeviceSelected={(ip, port) => {
+                  connectToDevice(ip, port);
+                }}
+              />
+            </div>
+          )}
+
+          {audioMode === 'udp' && isClientConnected && (
+            <div className="udp-audio-status">
+              <p>✅ Đã kết nối đến giáo viên qua UDP: {clientIp}</p>
+              <button onClick={disconnectFromDevice} className="btn danger">
+                Ngắt kết nối UDP
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -214,6 +303,8 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
           )}
         </>
       )}
+
+      <DebugPanel />
     </div>
   );
 }

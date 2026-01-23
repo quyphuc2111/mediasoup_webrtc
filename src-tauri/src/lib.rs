@@ -1,8 +1,16 @@
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use tauri::{State, Manager, AppHandle};
 use serde::{Deserialize, Serialize};
+
+mod udp_audio;
+mod lan_discovery;
+mod database;
+mod audio_capture;
+
+use database::{init_database, save_device, get_all_devices, delete_device, SavedDevice};
+use lan_discovery::{discover_devices, respond_to_discovery, DiscoveredDevice};
 
 #[derive(Default)]
 pub struct ServerState {
@@ -273,15 +281,332 @@ fn get_server_info(state: State<ServerState>) -> Result<ServerInfo, String> {
     info_guard.clone().ok_or_else(|| "Server not running".to_string())
 }
 
+#[derive(Default)]
+pub struct DatabaseState {
+    conn: Mutex<Option<rusqlite::Connection>>,
+}
+
+#[derive(Default)]
+pub struct DiscoveryState {
+    listener_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    is_running: Mutex<bool>,
+}
+
+pub struct AudioCaptureState {
+    capture: Arc<Mutex<Option<audio_capture::AudioCapture>>>,
+    is_running: Mutex<bool>,
+    sender_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    should_stop: Arc<Mutex<bool>>,
+}
+
+impl Default for AudioCaptureState {
+    fn default() -> Self {
+        Self {
+            capture: Arc::new(Mutex::new(None)),
+            is_running: Mutex::new(false),
+            sender_handle: Mutex::new(None),
+            should_stop: Arc::new(Mutex::new(false)),
+        }
+    }
+}
+
+// UDP Audio Commands - RustDesk approach: capture audio in Rust and auto-send via UDP
+#[tauri::command]
+fn start_udp_audio_capture(
+    ip: String,
+    port: u16,
+    state: State<AudioCaptureState>,
+) -> Result<String, String> {
+    let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
+    if *is_running {
+        return Ok("Audio capture already running".to_string());
+    }
+
+    // Create audio capture
+    let mut capture_guard = state.capture.lock().map_err(|e| e.to_string())?;
+    let mut capture = audio_capture::AudioCapture::new()
+        .map_err(|e| format!("Failed to create audio capture: {}", e))?;
+    
+    capture.start_capture()
+        .map_err(|e| format!("Failed to start audio capture: {}", e))?;
+    
+    let sample_rate = capture.get_sample_rate();
+    let channels = capture.get_channels();
+    
+    // Calculate frame size: 10ms of audio (like RustDesk)
+    let frame_size = (sample_rate as usize / 100) * channels as usize;
+    
+    *capture_guard = Some(capture);
+    *is_running = true;
+    
+    // Create background task to send audio via UDP
+    let capture_arc = Arc::clone(&state.capture);
+    let should_stop = Arc::clone(&state.should_stop);
+    *should_stop.lock().unwrap() = false;
+    
+    // Clone values for move into closure
+    let ip_clone = ip.clone();
+    let port_clone = port;
+    
+    let sender_handle = std::thread::spawn(move || {
+        let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to bind UDP socket for audio: {}", e);
+                return;
+            }
+        };
+        
+        let addr = format!("{}:{}", ip_clone, port_clone);
+        log::info!("Starting audio sender to {}", addr);
+        
+        loop {
+            // Check if should stop
+            if *should_stop.lock().unwrap() {
+                log::info!("Audio sender stopped");
+                break;
+            }
+            
+            // Read samples from buffer
+            let samples = {
+                let capture_guard = capture_arc.lock().unwrap();
+                if let Some(capture) = capture_guard.as_ref() {
+                    if capture.has_samples(frame_size) {
+                        capture.read_samples(frame_size)
+                    } else {
+                        // Not enough samples yet, wait a bit
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                } else {
+                    // Capture stopped
+                    break;
+                }
+            };
+            
+            // Convert i16 samples to bytes (little-endian)
+            let mut bytes = Vec::with_capacity(samples.len() * 2);
+            for sample in samples {
+                bytes.extend_from_slice(&sample.to_le_bytes());
+            }
+            
+            // Send via UDP
+            if let Err(e) = socket.send_to(&bytes, &addr) {
+                log::warn!("Failed to send audio: {}", e);
+            }
+            
+            // Sleep to maintain ~10ms frame rate
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+    
+    let mut sender_handle_guard = state.sender_handle.lock().map_err(|e| e.to_string())?;
+    *sender_handle_guard = Some(sender_handle);
+    
+    Ok(format!("Audio capture started, sending to {}:{}", ip, port))
+}
+
+#[tauri::command]
+fn stop_udp_audio_capture(
+    state: State<AudioCaptureState>,
+) -> Result<(), String> {
+    // Stop sender thread
+    {
+        *state.should_stop.lock().map_err(|e| e.to_string())? = true;
+        let mut sender_handle_guard = state.sender_handle.lock().map_err(|e| e.to_string())?;
+        if let Some(handle) = sender_handle_guard.take() {
+            handle.thread().unpark(); // Wake up thread to check should_stop
+            let _ = handle.join(); // Wait for thread to finish
+        }
+    }
+    
+    // Stop audio capture
+    let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
+    let mut capture_guard = state.capture.lock().map_err(|e| e.to_string())?;
+    
+    if let Some(mut capture) = capture_guard.take() {
+        capture.stop_capture();
+    }
+    
+    *is_running = false;
+    Ok(())
+}
+
+#[tauri::command]
+fn read_audio_samples(
+    count: usize,
+    state: State<AudioCaptureState>,
+) -> Result<Vec<i16>, String> {
+    let capture_guard = state.capture.lock().map_err(|e| e.to_string())?;
+    
+    if let Some(capture) = capture_guard.as_ref() {
+        Ok(capture.read_samples(count))
+    } else {
+        Err("Audio capture not started".to_string())
+    }
+}
+
+#[tauri::command]
+fn send_udp_audio(ip: String, port: u16, audio_data: Vec<i16>) -> Result<(), String> {
+    use std::net::UdpSocket;
+    
+    // Convert i16 to bytes (little-endian)
+    let mut bytes = Vec::with_capacity(audio_data.len() * 2);
+    for sample in audio_data {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("Failed to bind: {}", e))?;
+    
+    let addr = format!("{}:{}", ip, port);
+    socket.send_to(&bytes, &addr)
+        .map_err(|e| format!("Failed to send: {}", e))?;
+    
+    Ok(())
+}
+
+// LAN Discovery Commands
+#[tauri::command]
+fn discover_lan_devices(port: u16, timeout_ms: u64) -> Result<Vec<DiscoveredDevice>, String> {
+    discover_devices(port, timeout_ms)
+}
+
+#[tauri::command]
+fn start_discovery_listener(
+    name: String,
+    port: u16,
+    state: State<DiscoveryState>,
+) -> Result<(), String> {
+    // Check if already running
+    let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
+    if *is_running {
+        return Ok(()); // Already running, return success
+    }
+
+    // Check if port is available
+    let test_socket = std::net::UdpSocket::bind(format!("0.0.0.0:{}", port));
+    if test_socket.is_err() {
+        return Err(format!("Port {} is already in use or not available", port));
+    }
+    drop(test_socket); // Release the test socket
+
+    let name_clone = name.clone();
+    let port_clone = port;
+
+    // Start in background thread
+    let handle = std::thread::spawn(move || {
+        // Set up signal handling for graceful shutdown
+        let result = respond_to_discovery(&name_clone, port_clone);
+        if let Err(e) = result {
+            eprintln!("Discovery listener error: {}", e);
+        }
+    });
+
+    // Store handle and mark as running
+    let mut handle_guard = state.listener_handle.lock().map_err(|e| e.to_string())?;
+    *handle_guard = Some(handle);
+    *is_running = true;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_discovery_listener(state: State<DiscoveryState>) -> Result<(), String> {
+    let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
+    if !*is_running {
+        return Ok(()); // Not running, return success
+    }
+
+    let mut handle_guard = state.listener_handle.lock().map_err(|e| e.to_string())?;
+    if let Some(handle) = handle_guard.take() {
+        // Note: We can't easily stop the thread, but we mark it as stopped
+        // The thread will continue until it errors or the app closes
+        drop(handle);
+    }
+
+    *is_running = false;
+    Ok(())
+}
+
+// Database Commands
+#[tauri::command]
+fn init_db(app: AppHandle, state: State<DatabaseState>) -> Result<(), String> {
+    let conn = init_database(&app)
+        .map_err(|e| format!("Failed to init database: {}", e))?;
+    
+    let mut db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    *db_state = Some(conn);
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn save_device_to_db(
+    ip: String,
+    name: String,
+    port: u16,
+    state: State<DatabaseState>,
+) -> Result<i64, String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    let device = SavedDevice {
+        id: None,
+        ip,
+        name,
+        port,
+        last_used: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+    
+    save_device(conn, &device)
+        .map_err(|e| format!("Failed to save device: {}", e))
+}
+
+#[tauri::command]
+fn get_saved_devices(state: State<DatabaseState>) -> Result<Vec<SavedDevice>, String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    get_all_devices(conn)
+        .map_err(|e| format!("Failed to get devices: {}", e))
+}
+
+#[tauri::command]
+fn remove_device_from_db(id: i64, state: State<DatabaseState>) -> Result<(), String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    delete_device(conn, id)
+        .map_err(|e| format!("Failed to delete device: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ServerState::default())
+        .manage(DatabaseState::default())
+        .manage(DiscoveryState::default())
+        .manage(AudioCaptureState::default())
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
-            get_server_info
+            get_server_info,
+            start_udp_audio_capture,
+            stop_udp_audio_capture,
+            read_audio_samples,
+            send_udp_audio,
+            discover_lan_devices,
+            start_discovery_listener,
+            stop_discovery_listener,
+            init_db,
+            save_device_to_db,
+            get_saved_devices,
+            remove_device_from_db
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
