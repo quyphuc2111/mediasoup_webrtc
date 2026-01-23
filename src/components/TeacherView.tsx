@@ -1,5 +1,9 @@
+import { useState } from 'react';
 import { useMediasoup } from '../hooks/useMediasoup';
+import { useUdpAudio } from '../hooks/useUdpAudio';
 import { VideoPlayer } from './VideoPlayer';
+import { LanDiscovery } from './LanDiscovery';
+import { DebugPanel } from './DebugPanel';
 
 interface TeacherViewProps {
   serverUrl: string;
@@ -9,6 +13,9 @@ interface TeacherViewProps {
 }
 
 export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherViewProps) {
+  const [audioMode, setAudioMode] = useState<'webrtc' | 'udp'>('webrtc');
+  const [showLanDiscovery, setShowLanDiscovery] = useState(false);
+
   const {
     connectionState,
     error,
@@ -27,6 +34,14 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     stopScreenShare,
     toggleScreenAudio,
   } = useMediasoup();
+
+  const {
+    isServerRunning,
+    startUdpAudioServer,
+    stopUdpAudioServer,
+    serverPort,
+    error: udpError,
+  } = useUdpAudio();
 
   const handleConnect = async () => {
     await connect(serverUrl, roomId, name, true);
@@ -53,11 +68,60 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
         </div>
       </div>
 
-      {error && (
-        <div className={`error-message ${error.startsWith('⚠️') ? 'warning-message' : ''}`}>
-          {error.split('\n').map((line, i) => (
+      {(error || udpError) && (
+        <div className={`error-message ${(error || udpError)?.startsWith('⚠️') ? 'warning-message' : ''}`}>
+          {(error || udpError)?.split('\n').map((line, i) => (
             <div key={i}>{line || '\u00A0'}</div>
           ))}
+        </div>
+      )}
+
+      <div className="audio-mode-selector">
+        <label>Chế độ Audio:</label>
+        <select
+          value={audioMode}
+          onChange={async (e) => {
+            setAudioMode(e.target.value as 'webrtc' | 'udp');
+            if (e.target.value === 'udp' && !isServerRunning) {
+              // Broadcast to all devices in LAN (RustDesk approach)
+              await startUdpAudioServer(5000, '255.255.255.255');
+            } else if (e.target.value === 'webrtc' && isServerRunning) {
+              await stopUdpAudioServer();
+            }
+          }}
+          className="mode-select"
+        >
+          <option value="webrtc">WebRTC (Mặc định)</option>
+          <option value="udp">UDP Streaming</option>
+        </select>
+        {audioMode === 'udp' && (
+          <button
+            onClick={() => setShowLanDiscovery(!showLanDiscovery)}
+            className="btn secondary"
+          >
+            {showLanDiscovery ? 'Ẩn' : 'Hiện'} LAN Discovery
+          </button>
+        )}
+      </div>
+
+      {audioMode === 'udp' && showLanDiscovery && (
+        <div className="lan-discovery-section">
+          <LanDiscovery />
+        </div>
+      )}
+
+      {audioMode === 'udp' && isServerRunning && (
+        <div className="udp-audio-controls">
+          <p>✅ UDP Audio đang chạy (RustDesk approach)</p>
+          <p className="info-text">
+            🎤 Audio được capture tự động trong Rust và gửi qua UDP broadcast (255.255.255.255:{serverPort})
+          </p>
+          <button
+            onClick={stopUdpAudioServer}
+            className="btn danger"
+          >
+            ⏹️ Dừng UDP Audio
+          </button>
         </div>
       )}
 
@@ -147,6 +211,8 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
           </ul>
         </div>
       )}
+
+      <DebugPanel />
     </div>
   );
 }
