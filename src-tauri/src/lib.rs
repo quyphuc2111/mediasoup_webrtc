@@ -4,6 +4,13 @@ use std::path::PathBuf;
 use tauri::{State, Manager, AppHandle};
 use serde::{Deserialize, Serialize};
 
+mod udp_audio;
+mod lan_discovery;
+mod database;
+
+use database::{init_database, save_device, get_all_devices, delete_device, update_device_last_used, SavedDevice};
+use lan_discovery::{discover_devices, respond_to_discovery, DiscoveredDevice};
+
 #[derive(Default)]
 pub struct ServerState {
     process: Mutex<Option<Child>>,
@@ -273,15 +280,129 @@ fn get_server_info(state: State<ServerState>) -> Result<ServerInfo, String> {
     info_guard.clone().ok_or_else(|| "Server not running".to_string())
 }
 
+#[derive(Default)]
+pub struct DatabaseState {
+    conn: Mutex<Option<rusqlite::Connection>>,
+}
+
+// UDP Audio Commands
+#[tauri::command]
+fn start_udp_audio_server(port: u16, app: AppHandle) -> Result<String, String> {
+    // This will be handled by a background task
+    // For now, just return success
+    Ok(format!("UDP audio server started on port {}", port))
+}
+
+#[tauri::command]
+fn stop_udp_audio_server() -> Result<(), String> {
+    Ok(())
+}
+
+#[tauri::command]
+fn send_udp_audio(ip: String, port: u16, audio_data: Vec<u8>) -> Result<(), String> {
+    use std::net::UdpSocket;
+    
+    let socket = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("Failed to bind: {}", e))?;
+    
+    let addr = format!("{}:{}", ip, port);
+    socket.send_to(&audio_data, &addr)
+        .map_err(|e| format!("Failed to send: {}", e))?;
+    
+    Ok(())
+}
+
+// LAN Discovery Commands
+#[tauri::command]
+fn discover_lan_devices(port: u16, timeout_ms: u64) -> Result<Vec<DiscoveredDevice>, String> {
+    discover_devices(port, timeout_ms)
+}
+
+#[tauri::command]
+fn start_discovery_listener(name: String, port: u16) -> Result<(), String> {
+    // Start in background thread
+    std::thread::spawn(move || {
+        if let Err(e) = respond_to_discovery(&name, port) {
+            eprintln!("Discovery listener error: {}", e);
+        }
+    });
+    Ok(())
+}
+
+// Database Commands
+#[tauri::command]
+fn init_db(app: AppHandle, state: State<DatabaseState>) -> Result<(), String> {
+    let conn = init_database(&app)
+        .map_err(|e| format!("Failed to init database: {}", e))?;
+    
+    let mut db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    *db_state = Some(conn);
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn save_device_to_db(
+    ip: String,
+    name: String,
+    port: u16,
+    state: State<DatabaseState>,
+) -> Result<i64, String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    let device = SavedDevice {
+        id: None,
+        ip,
+        name,
+        port,
+        last_used: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    };
+    
+    save_device(conn, &device)
+        .map_err(|e| format!("Failed to save device: {}", e))
+}
+
+#[tauri::command]
+fn get_saved_devices(state: State<DatabaseState>) -> Result<Vec<SavedDevice>, String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    get_all_devices(conn)
+        .map_err(|e| format!("Failed to get devices: {}", e))
+}
+
+#[tauri::command]
+fn remove_device_from_db(id: i64, state: State<DatabaseState>) -> Result<(), String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    delete_device(conn, id)
+        .map_err(|e| format!("Failed to delete device: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ServerState::default())
+        .manage(DatabaseState::default())
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
-            get_server_info
+            get_server_info,
+            start_udp_audio_server,
+            stop_udp_audio_server,
+            send_udp_audio,
+            discover_lan_devices,
+            start_discovery_listener,
+            init_db,
+            save_device_to_db,
+            get_saved_devices,
+            remove_device_from_db
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

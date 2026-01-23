@@ -1,6 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMediasoup } from '../hooks/useMediasoup';
+import { useUdpAudio } from '../hooks/useUdpAudio';
 import { VideoPlayer } from './VideoPlayer';
+import { LanDiscovery } from './LanDiscovery';
 
 interface StudentViewProps {
   serverUrl: string;
@@ -10,6 +12,9 @@ interface StudentViewProps {
 }
 
 export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentViewProps) {
+  const [audioMode, setAudioMode] = useState<'webrtc' | 'udp'>('webrtc');
+  const [showLanDiscovery, setShowLanDiscovery] = useState(false);
+
   const {
     connectionState,
     error,
@@ -20,6 +25,15 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
     enablePushToTalk,
     disablePushToTalk,
   } = useMediasoup();
+
+  const {
+    isClientConnected,
+    clientIp,
+    connectToDevice,
+    disconnectFromDevice,
+    startDiscoveryListener,
+    error: udpError,
+  } = useUdpAudio();
 
   const handleConnect = async () => {
     await connect(serverUrl, roomId, name, false);
@@ -130,7 +144,53 @@ export function StudentView({ serverUrl, roomId, name, onDisconnect }: StudentVi
             </div>
           </div>
 
-          {error && <div className="error-message">❌ {error}</div>}
+          {(error || udpError) && (
+            <div className="error-message">❌ {error || udpError}</div>
+          )}
+
+          <div className="audio-mode-selector">
+            <label>Chế độ Audio:</label>
+            <select
+              value={audioMode}
+              onChange={(e) => {
+                setAudioMode(e.target.value as 'webrtc' | 'udp');
+                if (e.target.value === 'udp') {
+                  startDiscoveryListener(name, 5000);
+                }
+              }}
+              className="mode-select"
+            >
+              <option value="webrtc">WebRTC (Mặc định)</option>
+              <option value="udp">UDP Streaming</option>
+            </select>
+            {audioMode === 'udp' && (
+              <button
+                onClick={() => setShowLanDiscovery(!showLanDiscovery)}
+                className="btn secondary"
+              >
+                {showLanDiscovery ? 'Ẩn' : 'Hiện'} LAN Discovery
+              </button>
+            )}
+          </div>
+
+          {audioMode === 'udp' && showLanDiscovery && (
+            <div className="lan-discovery-section">
+              <LanDiscovery
+                onDeviceSelected={(ip, port) => {
+                  connectToDevice(ip, port);
+                }}
+              />
+            </div>
+          )}
+
+          {audioMode === 'udp' && isClientConnected && (
+            <div className="udp-audio-status">
+              <p>✅ Đã kết nối đến giáo viên qua UDP: {clientIp}</p>
+              <button onClick={disconnectFromDevice} className="btn danger">
+                Ngắt kết nối UDP
+              </button>
+            </div>
+          )}
         </>
       )}
 
