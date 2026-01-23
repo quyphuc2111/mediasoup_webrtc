@@ -405,25 +405,26 @@ h1 {
 
 /* Stream overlay controls */
 .stream-overlay {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 20;
+  z-index: 9999;
   pointer-events: none;
   display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 2rem;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 1rem;
 }
 
 .stream-controls-overlay {
   display: flex;
   gap: 1rem;
   pointer-events: auto;
-  opacity: 0;
+  opacity: 1;
   transition: opacity 0.3s;
+  margin-top: 1rem;
 }
 
 .stream-overlay:hover .stream-controls-overlay,

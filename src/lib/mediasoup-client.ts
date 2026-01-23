@@ -222,10 +222,13 @@ export class MediasoupClient {
     });
   }
 
-  async produceScreen(stream: MediaStream): Promise<void> {
+  async produceScreen(stream: MediaStream): Promise<{ videoProducerId: string | null; audioProducerId: string | null }> {
     if (!this.sendTransport) {
       await this.createSendTransport();
     }
+
+    let videoProducerId: string | null = null;
+    let audioProducerId: string | null = null;
 
     // Produce video track với chất lượng siêu nét
     const videoTrack = stream.getVideoTracks()[0];
@@ -252,6 +255,7 @@ export class MediasoupClient {
         },
       });
       this.producers.set(producer.id, producer);
+      videoProducerId = producer.id;
       console.log('[MediasoupClient] ✅ Video producer created:', producer.id);
     } else {
       console.warn('[MediasoupClient] ⚠️ No video track found in stream');
@@ -275,7 +279,7 @@ export class MediasoupClient {
       // Kiểm tra xem track có đang active không
       if (audioTrack.readyState === 'ended') {
         console.error('[MediasoupClient] ❌ Audio track đã bị ended, không thể produce');
-        return;
+        return { videoProducerId, audioProducerId: null };
       }
 
       // Đảm bảo track được enable
@@ -296,6 +300,7 @@ export class MediasoupClient {
           },
         });
         this.producers.set(producer.id, producer);
+        audioProducerId = producer.id;
         console.log('[MediasoupClient] ✅ Audio producer created:', producer.id, 'kind:', producer.kind);
       } catch (error) {
         console.error('[MediasoupClient] ❌ Failed to produce audio track:', error);
@@ -305,6 +310,8 @@ export class MediasoupClient {
       console.warn('[MediasoupClient] ⚠️ No audio track found in stream. System audio có thể chưa được capture.');
       console.warn('[MediasoupClient] Hướng dẫn: Đảm bảo đã chọn "Share system audio" trong hộp thoại chia sẻ màn hình.');
     }
+
+    return { videoProducerId, audioProducerId };
   }
 
   async produceMicrophone(stream: MediaStream): Promise<string | null> {
@@ -455,6 +462,16 @@ export class MediasoupClient {
     } else {
       console.warn('[MediasoupClient] Producer not found or has no track:', producerId);
     }
+  }
+
+  getScreenAudioProducerId(): string | null {
+    // Find audio producer from screen share (kind === 'audio')
+    for (const [producerId, producer] of this.producers.entries()) {
+      if (producer.kind === 'audio') {
+        return producerId;
+      }
+    }
+    return null;
   }
 
   private closeAllConsumers(): void {

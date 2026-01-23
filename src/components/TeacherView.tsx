@@ -17,12 +17,15 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
     isSharing,
     isMicActive,
     studentAudioStream,
+    isScreenAudioEnabled,
+    hasScreenAudio,
     connect,
     disconnect,
     startScreenShare,
     startMicrophone,
     stopMicrophone,
     stopScreenShare,
+    toggleScreenAudio,
   } = useMediasoup();
 
   const handleConnect = async () => {
@@ -98,6 +101,15 @@ export function TeacherView({ serverUrl, roomId, name, onDisconnect }: TeacherVi
 
         {connectionState === 'connected' && isSharing && (
           <>
+            {hasScreenAudio && (
+              <button 
+                onClick={toggleScreenAudio} 
+                className={`btn ${isScreenAudioEnabled ? 'secondary' : 'secondary'}`}
+                title={isScreenAudioEnabled ? 'Tắt âm thanh màn hình' : 'Bật âm thanh màn hình'}
+              >
+                {isScreenAudioEnabled ? '🔊 Âm thanh màn hình: Bật' : '🔇 Âm thanh màn hình: Tắt'}
+              </button>
+            )}
             {!isMicActive ? (
               <button onClick={startMicrophone} className="btn secondary">
                 🎤 Bật Microphone

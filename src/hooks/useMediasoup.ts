@@ -72,6 +72,12 @@ export function useMediasoup() {
   const micProducerIdRef = useRef<string | null>(null);
   const [isPushToTalkActive, setIsPushToTalkActive] = useState(false);
   const [studentAudioStream, setStudentAudioStream] = useState<MediaStream | null>(null);
+  // Map to track which audio track belongs to which peer
+  const studentAudioTracksRef = useRef<Map<string, MediaStreamTrack>>(new Map());
+  // Track screen audio producer ID and state
+  const screenAudioProducerIdRef = useRef<string | null>(null);
+  const [isScreenAudioEnabled, setIsScreenAudioEnabled] = useState(true);
+  const [hasScreenAudio, setHasScreenAudio] = useState(false);
 
   const clientRef = useRef<MediasoupClient | null>(null);
 
@@ -118,6 +124,20 @@ export function useMediasoup() {
         setPeers(prev => prev.filter(p => p.id !== id));
         if (wasTeacher) {
           setRemoteStream(null);
+        } else {
+          // Remove audio track from this student when they leave
+          const audioTrack = studentAudioTracksRef.current.get(id);
+          if (audioTrack) {
+            setStudentAudioStream(prev => {
+              if (prev) {
+                prev.removeTrack(audioTrack);
+                audioTrack.stop();
+                console.log(`[Teacher] Removed audio track from student ${id} who left`);
+              }
+              return prev;
+            });
+            studentAudioTracksRef.current.delete(id);
+          }
         }
       },
       onNewProducer: async (producerId: string, kind: MediaKind, peerId?: string) => {
@@ -176,20 +196,29 @@ export function useMediasoup() {
             
             try {
               const consumer = await clientRef.current.consume(producerId);
-              if (consumer) {
-                console.log(`[Teacher] ✅ Successfully consumed student audio producer ${producerId}`);
+              if (consumer && peerId) {
+                console.log(`[Teacher] ✅ Successfully consumed student audio producer ${producerId} from peer ${peerId}`);
+                
+                // Remove old track from this peer if exists
+                const oldTrack = studentAudioTracksRef.current.get(peerId);
+                if (oldTrack) {
+                  setStudentAudioStream(prev => {
+                    if (prev) {
+                      prev.removeTrack(oldTrack);
+                      oldTrack.stop();
+                      console.log(`[Teacher] Removed old audio track from peer ${peerId}`);
+                    }
+                    return prev;
+                  });
+                }
+                
+                // Store mapping and add new track
+                studentAudioTracksRef.current.set(peerId, consumer.track);
+                
                 setStudentAudioStream(prev => {
                   const stream = prev || new MediaStream();
-                  
-                  // Remove old track from same peer if exists
-                  const existingTracks = stream.getTracks();
-                  existingTracks.forEach(track => {
-                    stream.removeTrack(track);
-                    track.stop();
-                  });
-                  
-                  // Add new track
                   stream.addTrack(consumer.track);
+                  console.log(`[Teacher] Student audio stream now has ${stream.getAudioTracks().length} audio track(s) from ${studentAudioTracksRef.current.size} student(s)`);
                   return stream;
                 });
               }
@@ -257,6 +286,9 @@ export function useMediasoup() {
       return null;
     });
     clientRef.current?.stopProducing();
+    screenAudioProducerIdRef.current = null;
+    setHasScreenAudio(false);
+    setIsScreenAudioEnabled(true);
     setIsSharing(false);
   }, []);
 
@@ -353,7 +385,10 @@ export function useMediasoup() {
       }
 
       setLocalStream(screenStream);
-      await clientRef.current.produceScreen(screenStream);
+      const { audioProducerId } = await clientRef.current.produceScreen(screenStream);
+      screenAudioProducerIdRef.current = audioProducerId;
+      setHasScreenAudio(audioProducerId !== null);
+      setIsScreenAudioEnabled(audioProducerId !== null);
       setIsSharing(true);
 
       // Handle stream end (user clicks "Stop sharing")
@@ -556,6 +591,24 @@ export function useMediasoup() {
     setMicStream(null);
   }, [stopScreenShare, stopMicrophone]);
 
+  const toggleScreenAudio = useCallback(() => {
+    if (!clientRef.current || !screenAudioProducerIdRef.current) {
+      console.warn('[ToggleScreenAudio] No screen audio producer available');
+      return;
+    }
+
+    const producerId = screenAudioProducerIdRef.current;
+    if (isScreenAudioEnabled) {
+      clientRef.current.disableProducerTrack(producerId);
+      setIsScreenAudioEnabled(false);
+      console.log('[ToggleScreenAudio] ✅ Disabled screen audio');
+    } else {
+      clientRef.current.enableProducerTrack(producerId);
+      setIsScreenAudioEnabled(true);
+      console.log('[ToggleScreenAudio] ✅ Enabled screen audio');
+    }
+  }, [isScreenAudioEnabled]);
+
   return {
     connectionState,
     error,
@@ -566,6 +619,8 @@ export function useMediasoup() {
     isMicActive,
     isPushToTalkActive,
     studentAudioStream,
+    isScreenAudioEnabled,
+    hasScreenAudio,
     connect,
     disconnect,
     startScreenShare,
@@ -575,5 +630,6 @@ export function useMediasoup() {
     enablePushToTalk,
     disablePushToTalk,
     initializeStudentMicrophone,
+    toggleScreenAudio,
   };
 }
