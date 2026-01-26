@@ -8,6 +8,13 @@ mod udp_audio;
 mod lan_discovery;
 mod database;
 mod audio_capture;
+mod crypto;
+mod student_agent;
+mod teacher_connector;
+
+use crypto::{KeyPairInfo, VerifyResult};
+use student_agent::{AgentStatus, AgentConfig, AgentState};
+use teacher_connector::{ConnectorState, StudentConnection, ConnectionStatus};
 
 use database::{init_database, save_device, get_all_devices, delete_device, SavedDevice};
 use lan_discovery::{discover_devices, respond_to_discovery, DiscoveredDevice};
@@ -602,6 +609,209 @@ fn remove_device_from_db(id: i64, state: State<DatabaseState>) -> Result<(), Str
         .map_err(|e| format!("Failed to delete device: {}", e))
 }
 
+// ============================================================
+// Crypto Commands - View Client Authentication
+// ============================================================
+
+/// Generate a new keypair for teacher
+#[tauri::command]
+fn crypto_generate_keypair() -> Result<KeyPairInfo, String> {
+    let keypair = crypto::generate_keypair();
+    crypto::save_keypair(&keypair)?;
+    Ok(keypair)
+}
+
+/// Load existing keypair
+#[tauri::command]
+fn crypto_load_keypair() -> Result<KeyPairInfo, String> {
+    crypto::load_keypair()
+}
+
+/// Check if keypair exists
+#[tauri::command]
+fn crypto_has_keypair() -> bool {
+    crypto::has_keypair()
+}
+
+/// Export public key in shareable format
+#[tauri::command]
+fn crypto_export_public_key() -> Result<String, String> {
+    let keypair = crypto::load_keypair()?;
+    crypto::export_public_key(&keypair.public_key)
+}
+
+/// Import teacher's public key (for students)
+#[tauri::command]
+fn crypto_import_teacher_key(key_data: String) -> Result<String, String> {
+    let normalized = crypto::import_public_key(&key_data)?;
+    crypto::save_teacher_public_key(&normalized)?;
+    Ok(normalized)
+}
+
+/// Load teacher's public key (for students)
+#[tauri::command]
+fn crypto_load_teacher_key() -> Result<String, String> {
+    crypto::load_teacher_public_key()
+}
+
+/// Check if teacher's public key exists (for students)
+#[tauri::command]
+fn crypto_has_teacher_key() -> bool {
+    crypto::has_teacher_public_key()
+}
+
+/// Sign a challenge (for teacher connecting to student)
+#[tauri::command]
+fn crypto_sign_challenge(challenge_base64: String) -> Result<String, String> {
+    let keypair = crypto::load_keypair()?;
+    let challenge = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &challenge_base64
+    ).map_err(|e| format!("Invalid challenge base64: {}", e))?;
+    
+    crypto::sign_challenge(&keypair.private_key, &challenge)
+}
+
+/// Verify a signature (for student verifying teacher)
+#[tauri::command]
+fn crypto_verify_signature(
+    challenge_base64: String,
+    signature_base64: String,
+) -> Result<VerifyResult, String> {
+    let public_key = crypto::load_teacher_public_key()?;
+    let challenge = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &challenge_base64
+    ).map_err(|e| format!("Invalid challenge base64: {}", e))?;
+    
+    Ok(crypto::verify_signature(&public_key, &challenge, &signature_base64))
+}
+
+/// Generate a random challenge
+#[tauri::command]
+fn crypto_generate_challenge() -> String {
+    let challenge = crypto::generate_challenge();
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &challenge)
+}
+
+// ============================================================
+// Student Agent Commands
+// ============================================================
+
+/// Global agent state handle for async operations
+static AGENT_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn get_agent_runtime() -> &'static tokio::runtime::Runtime {
+    AGENT_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("Failed to create agent runtime")
+    })
+}
+
+/// Start the student agent
+#[tauri::command]
+fn start_student_agent(
+    port: u16,
+    student_name: String,
+    state: State<Arc<AgentState>>,
+) -> Result<(), String> {
+    // Update config
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        config.port = port;
+        config.student_name = student_name;
+    }
+    
+    // Start agent in background
+    let state_clone = Arc::clone(&state);
+    get_agent_runtime().spawn(async move {
+        if let Err(e) = student_agent::start_agent(state_clone).await {
+            log::error!("[StudentAgent] Error: {}", e);
+        }
+    });
+    
+    Ok(())
+}
+
+/// Stop the student agent
+#[tauri::command]
+fn stop_student_agent(state: State<Arc<AgentState>>) -> Result<(), String> {
+    student_agent::stop_agent(&state)
+}
+
+/// Get current agent status
+#[tauri::command]
+fn get_agent_status(state: State<Arc<AgentState>>) -> AgentStatus {
+    state.get_status()
+}
+
+/// Get agent configuration
+#[tauri::command]
+fn get_agent_config(state: State<Arc<AgentState>>) -> Result<AgentConfig, String> {
+    state.config.lock()
+        .map(|c| c.clone())
+        .map_err(|e| e.to_string())
+}
+
+// ============================================================
+// Teacher Connector Commands
+// ============================================================
+
+/// Connect to a student agent
+#[tauri::command]
+async fn connect_to_student(
+    ip: String,
+    port: u16,
+    state: State<'_, Arc<ConnectorState>>,
+) -> Result<String, String> {
+    teacher_connector::connect_to_student(Arc::clone(&state), ip, port).await
+}
+
+/// Disconnect from a student
+#[tauri::command]
+fn disconnect_from_student(
+    connection_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::disconnect_student(&state, &connection_id)
+}
+
+/// Request screen from a student
+#[tauri::command]
+fn request_student_screen(
+    connection_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::request_screen(&state, &connection_id)
+}
+
+/// Stop viewing student screen
+#[tauri::command]
+fn stop_student_screen(
+    connection_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::stop_screen(&state, &connection_id)
+}
+
+/// Get all student connections
+#[tauri::command]
+fn get_student_connections(state: State<Arc<ConnectorState>>) -> Vec<StudentConnection> {
+    state.get_all_connections()
+}
+
+/// Get a single student connection
+#[tauri::command]
+fn get_student_connection(
+    connection_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Option<StudentConnection> {
+    state.get_connection(&connection_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -610,6 +820,8 @@ pub fn run() {
         .manage(DatabaseState::default())
         .manage(DiscoveryState::default())
         .manage(AudioCaptureState::default())
+        .manage(Arc::new(AgentState::default()))
+        .manage(Arc::new(ConnectorState::default()))
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
@@ -624,7 +836,30 @@ pub fn run() {
             init_db,
             save_device_to_db,
             get_saved_devices,
-            remove_device_from_db
+            remove_device_from_db,
+            // Crypto commands
+            crypto_generate_keypair,
+            crypto_load_keypair,
+            crypto_has_keypair,
+            crypto_export_public_key,
+            crypto_import_teacher_key,
+            crypto_load_teacher_key,
+            crypto_has_teacher_key,
+            crypto_sign_challenge,
+            crypto_verify_signature,
+            crypto_generate_challenge,
+            // Student Agent commands
+            start_student_agent,
+            stop_student_agent,
+            get_agent_status,
+            get_agent_config,
+            // Teacher Connector commands
+            connect_to_student,
+            disconnect_from_student,
+            request_student_screen,
+            stop_student_screen,
+            get_student_connections,
+            get_student_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -43,4 +43,11 @@ dirs = "5"
 cpal = { git = "https://github.com/rustdesk-org/cpal", branch = "osx-screencapturekit" }
 dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"] }
 log = "0.4"
+# View Client feature - key pair authentication
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+base64 = "0.22"
+# WebSocket server for student agent
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
 
