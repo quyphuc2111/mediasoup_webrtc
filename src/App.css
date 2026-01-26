@@ -708,3 +708,823 @@ h1 {
   text-align: center;
   color: var(--text-secondary);
 }
+
+/* Page Grid - Home Page */
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.page-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 2rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-align: center;
+}
+
+.page-card:hover {
+  background: var(--border);
+  border-color: var(--primary);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(59, 130, 246, 0.2);
+}
+
+.page-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.page-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.page-desc {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+/* Back Button */
+.back-btn {
+  position: absolute;
+  top: 1rem;
+  left: 1rem;
+  background: var(--bg-secondary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.back-btn:hover {
+  background: var(--border);
+  border-color: var(--primary);
+}
+
+/* ============================================================
+   View Client Page Styles
+   ============================================================ */
+
+.view-client-page {
+  padding: 2rem;
+  min-height: 100vh;
+  position: relative;
+}
+
+.page-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.page-header h1 {
+  margin-bottom: 0.5rem;
+}
+
+/* Key Info Bar */
+.key-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-secondary);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+
+.key-info span {
+  color: var(--success);
+}
+
+/* Controls Bar */
+.controls-bar {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.connection-count {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* Warning Box */
+.warning-box {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid var(--warning);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.warning-box h3 {
+  margin: 0 0 0.5rem 0;
+  color: var(--warning);
+}
+
+.warning-box p {
+  margin: 0 0 1rem 0;
+  color: var(--text-secondary);
+}
+
+/* Student Grid */
+.student-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 4rem 2rem;
+  color: var(--text-secondary);
+}
+
+.empty-state .hint {
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+
+/* Student Thumbnail */
+.student-thumbnail {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.student-thumbnail.connected,
+.student-thumbnail.viewing {
+  cursor: pointer;
+}
+
+.student-thumbnail.connected:hover,
+.student-thumbnail.viewing:hover {
+  border-color: var(--primary);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.student-thumbnail.viewing {
+  border-color: var(--success);
+}
+
+.student-thumbnail.error {
+  border-color: var(--danger);
+}
+
+.thumbnail-screen {
+  aspect-ratio: 16 / 10;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+}
+
+.screen-placeholder span {
+  font-size: 2rem;
+}
+
+.screen-placeholder p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.screen-placeholder.connected span {
+  color: var(--success);
+}
+
+.screen-placeholder.error span {
+  color: var(--danger);
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.thumbnail-info {
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.student-name {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.student-ip {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.student-status {
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
+.student-status.connected,
+.student-status.viewing {
+  color: var(--success);
+}
+
+.student-status.connecting {
+  color: var(--warning);
+}
+
+.student-status.error {
+  color: var(--danger);
+}
+
+.student-status.disconnected {
+  color: var(--text-secondary);
+}
+
+.thumbnail-actions {
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Student Full View */
+.student-full-view {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+.full-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.full-view-header .student-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.full-view-header h2 {
+  margin: 0;
+}
+
+.full-view-header .student-ip {
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.full-view-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+.screen-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screen-placeholder.full {
+  color: var(--text-secondary);
+}
+
+.screen-placeholder.full span {
+  font-size: 4rem;
+}
+
+.screen-placeholder.full .hint {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.5rem;
+  min-width: 400px;
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal h3 {
+  margin: 0 0 1rem 0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+/* Key Manager Modal */
+.key-manager-modal {
+  min-width: 500px;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.close-btn:hover {
+  color: var(--text);
+}
+
+.keypair-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.info-row label {
+  color: var(--text-secondary);
+}
+
+.info-row code {
+  background: var(--bg);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.info-section label {
+  color: var(--text-secondary);
+}
+
+.public-key-display {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  font-family: monospace;
+  font-size: 0.85rem;
+  resize: none;
+  color: var(--text);
+}
+
+.warning-section {
+  background: var(--bg);
+  padding: 1rem;
+  border-radius: 8px;
+}
+
+.warning-section h4 {
+  margin: 0 0 0.5rem 0;
+}
+
+.warning-section ol {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+
+.warning-section li {
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+}
+
+.danger-zone {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.danger-zone h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--danger);
+}
+
+.warning-text {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+}
+
+.no-keypair {
+  text-align: center;
+  padding: 2rem;
+}
+
+.no-keypair p {
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+}
+
+.loading {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-secondary);
+}
+
+/* Student Agent Styles */
+.student-agent {
+  padding: 2rem;
+  min-height: 100vh;
+  position: relative;
+}
+
+.key-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+}
+
+.key-status.success {
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.key-status.warning {
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.key-import-modal {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.key-import-modal h4 {
+  margin: 0 0 0.5rem 0;
+}
+
+.key-import-modal .hint {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+}
+
+.key-import-modal textarea {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  color: var(--text);
+  font-family: monospace;
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.warning-hint {
+  color: var(--warning);
+  text-align: center;
+  margin-top: 1rem;
+}
+
+/* Button variants */
+.btn.small {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.btn.large {
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+}
+
+/* Page card student variant */
+.page-card.student {
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.page-card.student:hover {
+  border-color: var(--success);
+  box-shadow: 0 8px 24px rgba(34, 197, 94, 0.2);
+}
+
+/* Saved devices */
+.student-thumbnail.saved {
+  opacity: 0.8;
+  border-style: dashed;
+}
+
+.student-thumbnail.saved:hover {
+  opacity: 1;
+}
+
+.saved-devices-summary {
+  text-align: center;
+  padding: 1rem;
+  margin-top: 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* ============================================================
+   Veyon-style Key Manager
+   ============================================================ */
+
+.key-manager-modal.veyon-style {
+  min-width: 700px;
+  max-width: 800px;
+}
+
+.key-manager-modal.veyon-style .modal-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+  margin-bottom: 1rem;
+}
+
+.key-manager-modal.veyon-style .modal-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+/* Introduction Section */
+.intro-section {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.intro-section h4 {
+  margin: 0 0 0.5rem 0;
+  color: var(--primary);
+  font-size: 0.9rem;
+}
+
+.intro-content {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.intro-content p {
+  margin: 0 0 0.5rem 0;
+}
+
+.intro-content ol {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.intro-content li {
+  margin-bottom: 0.25rem;
+}
+
+/* Keys Section */
+.keys-section {
+  margin-bottom: 1.5rem;
+}
+
+.keys-section h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.keys-table-container {
+  display: flex;
+  gap: 1rem;
+}
+
+/* Keys Table */
+.keys-table {
+  flex: 1;
+  border-collapse: collapse;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.keys-table th,
+.keys-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.keys-table th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.keys-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.keys-table tbody tr:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.keys-table tbody tr.selected {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.keys-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 2rem !important;
+}
+
+.key-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.key-type.private {
+  color: var(--danger);
+}
+
+.key-type.public {
+  color: var(--success);
+}
+
+.pair-id {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+/* Action Buttons Column */
+.keys-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 140px;
+}
+
+.btn.action-btn {
+  width: 100%;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  justify-content: flex-start;
+}
+
+.btn.action-btn:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  border-color: var(--primary);
+}
+
+.btn.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Modal Footer */
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Sub Modals (Export/Import) */
+.sub-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.sub-modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  min-width: 450px;
+  max-width: 90vw;
+}
+
+.sub-modal h3 {
+  margin: 0 0 0.5rem 0;
+}
+
+.sub-modal .hint {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.export-textarea,
+.import-textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  resize: vertical;
+}
+
+.sub-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
