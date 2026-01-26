@@ -59,6 +59,10 @@ export function DebugPanel() {
         '[MediasoupClient]',
         '[ScreenShare]',
         '[ToggleScreenAudio]',
+        '[TeacherConnector]',
+        '[StudentAgent]',
+        '[Crypto]',
+        '[ViewClient]',
         'Discovery',
         'UDP',
         'LAN',
@@ -71,6 +75,13 @@ export function DebugPanel() {
         'Failed',
         'Started',
         'Stopped',
+        'Connecting',
+        'Connected',
+        'WebSocket',
+        'Authentication',
+        'keypair',
+        'challenge',
+        'signature',
       ];
       
       if (importantKeywords.some(keyword => msg.includes(keyword))) {
