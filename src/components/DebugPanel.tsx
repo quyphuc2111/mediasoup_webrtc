@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { listen } from '@tauri-apps/api/event';
 
 interface LogEntry {
   id: number;
@@ -59,6 +60,14 @@ export function DebugPanel() {
         '[MediasoupClient]',
         '[ScreenShare]',
         '[ToggleScreenAudio]',
+        '[TeacherConnector]',
+        '[StudentAgent]',
+        '[Crypto]',
+        '[ViewClient]',
+        '[H264Player]',
+        '[H264Encoder]',
+        '[ScreenCapture]',
+        '[H264]',
         'Discovery',
         'UDP',
         'LAN',
@@ -71,6 +80,24 @@ export function DebugPanel() {
         'Failed',
         'Started',
         'Stopped',
+        'Connecting',
+        'Connected',
+        'WebSocket',
+        'Authentication',
+        'keypair',
+        'challenge',
+        'signature',
+        'H.264',
+        'keyframe',
+        'SPS',
+        'PPS',
+        'AVCC',
+        'WebCodecs',
+        'decoder',
+        'encoder',
+        'Frame',
+        'bitstream',
+        'NAL',
       ];
       
       if (importantKeywords.some(keyword => msg.includes(keyword))) {
@@ -93,10 +120,38 @@ export function DebugPanel() {
       addLog('success', ...args);
     };
 
+    // Listen for logs from Rust backend
+    const setupTauriLogListener = async () => {
+      try {
+        const unlisten = await listen<{ level: string; message: string; timestamp: number }>('debug-log', (event) => {
+          const { level, message } = event.payload;
+          const levelMap: Record<string, 'info' | 'warn' | 'error' | 'success'> = {
+            'info': 'info',
+            'warn': 'warn',
+            'error': 'error',
+            'success': 'success',
+          };
+          addLog(levelMap[level] || 'info', message);
+        });
+        return unlisten;
+      } catch (e) {
+        console.warn('Failed to setup Tauri log listener:', e);
+        return () => {};
+      }
+    };
+
+    let unlistenTauri: (() => void) | null = null;
+    setupTauriLogListener().then(unlisten => {
+      unlistenTauri = unlisten;
+    });
+
     return () => {
       console.log = originalLog;
       console.warn = originalWarn;
       console.error = originalError;
+      if (unlistenTauri) {
+        unlistenTauri();
+      }
     };
   }, []);
 
