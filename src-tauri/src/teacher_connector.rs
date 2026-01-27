@@ -13,6 +13,9 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::crypto;
+use crate::video_stream::{connect_video_client, VideoFrame};
+
+use std::sync::atomic::AtomicBool;
 
 /// Connection status for a single student
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -53,7 +56,11 @@ pub enum StudentMessage {
     AuthFailed { reason: String },
 
     #[serde(rename = "screen_ready")]
-    ScreenReady { width: u32, height: u32 },
+    ScreenReady {
+        width: u32,
+        height: u32,
+        video_port: u16, // TCP port for video streaming
+    },
 
     #[serde(rename = "screen_frame")]
     ScreenFrame {
@@ -124,6 +131,7 @@ pub struct ConnectorState {
     pub screen_frames: Mutex<HashMap<String, ScreenFrame>>,
     pub screen_sizes: Mutex<HashMap<String, (u32, u32)>>,
     pub decoders: Mutex<HashMap<String, crate::h264_decoder::H264Decoder>>,
+    pub video_client_stop_flags: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl Default for ConnectorState {
@@ -134,6 +142,7 @@ impl Default for ConnectorState {
             screen_frames: Mutex::new(HashMap::new()),
             screen_sizes: Mutex::new(HashMap::new()),
             decoders: Mutex::new(HashMap::new()),
+            video_client_stop_flags: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -451,7 +460,7 @@ async fn handle_connection(
                         if binary_frame_count == 0 {
                             crate::log_debug("info", &format!("[TeacherConnector] First binary message received: {} bytes", data.len()));
                         }
-                        
+
                         // H.264 frame format:
                         // [1 byte: frame_type]
                         // [8 bytes: timestamp]
@@ -582,12 +591,16 @@ async fn handle_student_message(
         serde_json::from_str(text).map_err(|e| format!("Invalid message: {}", e))?;
 
     match msg {
-        StudentMessage::ScreenReady { width, height } => {
+        StudentMessage::ScreenReady {
+            width,
+            height,
+            video_port,
+        } => {
             crate::log_debug(
                 "info",
                 &format!(
-                    "[TeacherConnector] Screen ready from {} ({}x{})",
-                    id, width, height
+                    "[TeacherConnector] Screen ready from {} ({}x{}), video port: {}",
+                    id, width, height, video_port
                 ),
             );
 
@@ -595,6 +608,56 @@ async fn handle_student_message(
             if let Ok(mut sizes) = state.screen_sizes.lock() {
                 sizes.insert(id.to_string(), (width, height));
             }
+
+            // Extract IP from id (format: "ip:port")
+            let student_ip = id.split(':').next().unwrap_or("").to_string();
+
+            // Start TCP video client
+            let state_clone = Arc::clone(state);
+            let id_clone = id.to_string();
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let stop_flag_clone = Arc::clone(&stop_flag);
+
+            // Store stop flag
+            if let Ok(mut stop_flags) = state.video_client_stop_flags.lock() {
+                stop_flags.insert(id.to_string(), Arc::clone(&stop_flag));
+            }
+
+            // Create channel for incoming video frames
+            let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<VideoFrame>(64);
+
+            // Spawn video client task
+            tokio::spawn(async move {
+                if let Err(e) =
+                    connect_video_client(student_ip.clone(), video_port, frame_tx, stop_flag_clone)
+                        .await
+                {
+                    crate::log_debug(
+                        "error",
+                        &format!("[TeacherConnector] Video client error: {}", e),
+                    );
+                }
+            });
+
+            // Spawn task to receive frames and update screen_frames
+            tokio::spawn(async move {
+                while let Some(video_frame) = frame_rx.recv().await {
+                    let screen_frame = ScreenFrame {
+                        data: None,
+                        data_binary: Some(video_frame.data),
+                        sps_pps: video_frame.sps_pps,
+                        timestamp: video_frame.timestamp,
+                        width: video_frame.width,
+                        height: video_frame.height,
+                        is_keyframe: video_frame.is_keyframe,
+                        codec: "h264".to_string(),
+                    };
+
+                    if let Ok(mut frames) = state_clone.screen_frames.lock() {
+                        frames.insert(id_clone.clone(), screen_frame);
+                    }
+                }
+            });
 
             state.update_status(id, ConnectionStatus::Viewing);
         }

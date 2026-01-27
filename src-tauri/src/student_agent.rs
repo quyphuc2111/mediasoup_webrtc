@@ -5,6 +5,7 @@
 //! 2. Authenticates teacher using Ed25519 challenge-response
 //! 3. Captures and streams screen to teacher
 
+use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -13,12 +14,17 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex as TokioMutex};
+use tokio::sync::broadcast;
+use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::crypto;
 use crate::h264_encoder::H264Encoder;
 use crate::screen_capture;
+use crate::video_stream::{start_video_server, VideoFrame};
+
+/// TCP port for video streaming (separate from WebSocket control port)
+const VIDEO_STREAM_PORT: u16 = 3018;
 
 /// Agent status
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -54,9 +60,6 @@ pub enum TeacherMessage {
     #[serde(rename = "auth_response")]
     AuthResponse { signature: String },
 
-    #[serde(rename = "ldap_auth")]
-    LdapAuth { username: String, password: String },
-
     #[serde(rename = "request_screen")]
     RequestScreen,
 
@@ -74,8 +77,8 @@ pub enum StudentMessage {
     #[serde(rename = "welcome")]
     Welcome {
         student_name: String,
-        auth_mode: String,         // "Ed25519" or "Ldap"
-        challenge: Option<String>, // Base64 encoded (Ed25519 only)
+        auth_mode: String,         // "Ed25519"
+        challenge: Option<String>, // Base64 encoded
     },
 
     #[serde(rename = "auth_success")]
@@ -85,7 +88,11 @@ pub enum StudentMessage {
     AuthFailed { reason: String },
 
     #[serde(rename = "screen_ready")]
-    ScreenReady { width: u32, height: u32 },
+    ScreenReady {
+        width: u32,
+        height: u32,
+        video_port: u16, // TCP port for video streaming
+    },
 
     #[serde(rename = "screen_frame")]
     ScreenFrame {
@@ -154,6 +161,12 @@ impl AgentState {
     }
 }
 
+/// Type alias for WebSocket writer
+type WsWriter = SplitSink<WebSocketStream<TcpStream>, Message>;
+
+/// Shared WebSocket writer wrapped in Arc<Mutex>
+type SharedWsWriter = Arc<tokio::sync::Mutex<WsWriter>>;
+
 /// Handle a single WebSocket connection from teacher
 async fn handle_connection(
     stream: TcpStream,
@@ -172,26 +185,17 @@ async fn handle_connection(
         }
     };
 
-    let (mut write, mut read) = ws_stream.split();
+    let (write, mut read) = ws_stream.split();
 
-    // Check authentication mode
-    let auth_mode = crypto::load_auth_mode();
+    // Wrap writer in Arc<Mutex> so capture loop can send frames directly
+    let shared_writer: SharedWsWriter = Arc::new(tokio::sync::Mutex::new(write));
 
-    // Generate challenge for Ed25519 mode
-    let challenge = if auth_mode == crypto::AuthMode::Ed25519 {
-        crypto::generate_challenge()
-    } else {
-        vec![]
-    };
-
-    let challenge_b64 = if !challenge.is_empty() {
-        Some(base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &challenge,
-        ))
-    } else {
-        None
-    };
+    // Generate challenge for Ed25519 authentication
+    let challenge = crypto::generate_challenge();
+    let challenge_b64 = Some(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &challenge,
+    ));
 
     // Store connection state
     {
@@ -208,9 +212,6 @@ async fn handle_connection(
         );
     }
 
-    // Channel for screen frames - increased capacity for smooth streaming
-    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(30);
-
     // Get student name
     let student_name = state
         .config
@@ -218,84 +219,36 @@ async fn handle_connection(
         .map(|c| c.student_name.clone())
         .unwrap_or_else(|_| "Student".to_string());
 
-    // Send welcome with auth mode info
-    let auth_mode_str = match auth_mode {
-        crypto::AuthMode::Ed25519 => "Ed25519",
-        crypto::AuthMode::Ldap => "Ldap",
-    };
-
+    // Send welcome with Ed25519 auth mode
     let welcome = StudentMessage::Welcome {
         student_name,
-        auth_mode: auth_mode_str.to_string(),
+        auth_mode: "Ed25519".to_string(),
         challenge: challenge_b64,
     };
 
-    if let Err(e) = send_message(&mut write, &welcome).await {
-        log::error!("[StudentAgent] Failed to send welcome: {}", e);
-        return;
+    {
+        let mut writer = shared_writer.lock().await;
+        if let Err(e) = send_message(&mut *writer, &welcome).await {
+            log::error!("[StudentAgent] Failed to send welcome: {}", e);
+            return;
+        }
     }
 
     state.set_status(AgentStatus::Authenticating);
 
-    // Use Arc<Mutex> for the write half so it can be shared between tasks
-    let write = Arc::new(TokioMutex::new(write));
-    let write_for_frames = Arc::clone(&write);
-    
-    // Channel to signal frame sender to stop
-    let (frame_stop_tx, mut frame_stop_rx) = oneshot::channel::<()>();
-    
-    // Spawn a dedicated task for sending frames via WebSocket
-    // This ensures frames are sent independently of message handling
-    let frame_sender_handle = tokio::spawn(async move {
-        crate::log_debug("info", "[StudentAgent] Frame sender task started");
-        loop {
-            tokio::select! {
-                biased;  // Check stop signal first
-                
-                _ = &mut frame_stop_rx => {
-                    crate::log_debug("info", "[StudentAgent] Frame sender task stopping");
-                    break;
-                }
-                
-                frame_opt = frame_rx.recv() => {
-                    match frame_opt {
-                        Some(frame_data) => {
-                            let frame_size = frame_data.len();
-                            let mut writer = write_for_frames.lock().await;
-                            match writer.send(Message::Binary(frame_data)).await {
-                                Ok(_) => {
-                                    static SEND_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                                    let count = SEND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                                    if count == 1 || count % 30 == 0 {
-                                        crate::log_debug("info", &format!("[StudentAgent] Sent {} frames via WebSocket, last size={} bytes", count, frame_size));
-                                    }
-                                }
-                                Err(e) => {
-                                    crate::log_debug("error", &format!("[StudentAgent] Failed to send frame: {}", e));
-                                    break;
-                                }
-                            }
-                        }
-                        None => {
-                            crate::log_debug("info", "[StudentAgent] Frame channel closed");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        crate::log_debug("info", "[StudentAgent] Frame sender task ended");
-    });
+    crate::log_debug(
+        "info",
+        "[StudentAgent] Starting message loop (frames sent directly from capture)",
+    );
 
-    // Message handling loop - only handles text messages now
+    // Message handling loop - frames are sent directly from capture loop
     loop {
         tokio::select! {
-            // Handle incoming messages
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        let mut writer = write.lock().await;
-                        if let Err(e) = handle_message_with_capture(&text, addr, &state, &mut *writer, &frame_tx).await {
+                        let mut writer = shared_writer.lock().await;
+                        if let Err(e) = handle_message_with_shared_writer(&text, addr, &state, &mut *writer, Arc::clone(&shared_writer)).await {
                             log::error!("[StudentAgent] Error handling message: {}", e);
                             let error_msg = StudentMessage::Error { message: e };
                             let _ = send_message(&mut *writer, &error_msg).await;
@@ -306,7 +259,7 @@ async fn handle_connection(
                         break;
                     }
                     Some(Ok(Message::Ping(data))) => {
-                        let mut writer = write.lock().await;
+                        let mut writer = shared_writer.lock().await;
                         let _ = writer.send(Message::Pong(data)).await;
                     }
                     Some(Err(e)) => {
@@ -317,6 +270,7 @@ async fn handle_connection(
                     _ => {}
                 }
             }
+
             // Handle shutdown signal
             _ = shutdown_rx.recv() => {
                 log::info!("[StudentAgent] Shutdown signal received");
@@ -324,14 +278,10 @@ async fn handle_connection(
             }
         }
     }
-    
-    // Stop the frame sender task
-    let _ = frame_stop_tx.send(());
-    let _ = frame_sender_handle.await;
-    
+
     // Close WebSocket
     {
-        let mut writer = write.lock().await;
+        let mut writer = shared_writer.lock().await;
         let _ = writer.close().await;
     }
 
@@ -360,13 +310,13 @@ async fn handle_connection(
     log::info!("[StudentAgent] Connection handler finished for: {}", addr);
 }
 
-/// Handle a single message from teacher with screen capture support
-async fn handle_message_with_capture<S>(
+/// Handle a single message from teacher with shared WebSocket writer
+async fn handle_message_with_shared_writer<S>(
     text: &str,
     addr: SocketAddr,
     state: &Arc<AgentState>,
     write: &mut S,
-    frame_tx: &mpsc::Sender<Vec<u8>>,
+    shared_writer: SharedWsWriter,
 ) -> Result<(), String>
 where
     S: SinkExt<Message> + Unpin,
@@ -416,13 +366,18 @@ where
                 );
 
                 // AUTO-START SCREEN CAPTURE after authentication
-                start_screen_capture(addr, state, frame_tx)?;
+                // Use TCP streaming (NEW: separate from WebSocket)
+                start_screen_capture_tcp(addr, state)?;
 
                 // Get screen resolution
                 let (width, height) =
                     screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
 
-                let ready_response = StudentMessage::ScreenReady { width, height };
+                let ready_response = StudentMessage::ScreenReady {
+                    width,
+                    height,
+                    video_port: VIDEO_STREAM_PORT,
+                };
                 send_message(write, &ready_response).await?;
             } else {
                 let reason = result
@@ -434,75 +389,6 @@ where
                 send_message(write, &response).await?;
 
                 return Err(format!("Authentication failed: {}", reason));
-            }
-        }
-
-        TeacherMessage::LdapAuth { username, password } => {
-            // LDAP authentication
-            let is_authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if is_authenticated {
-                return Ok(()); // Already authenticated
-            }
-
-            // Load LDAP config and authenticate
-            let ldap_config = crate::ldap_auth::load_ldap_config()
-                .map_err(|e| format!("Failed to load LDAP config: {}", e))?;
-
-            let auth_result =
-                crate::ldap_auth::authenticate_ldap(&ldap_config, &username, &password).await;
-
-            if auth_result.success {
-                // Mark as authenticated
-                {
-                    let mut conns = state.connections.lock().unwrap();
-                    if let Some(conn) = conns.get_mut(&addr) {
-                        conn.authenticated = true;
-                    }
-                }
-
-                let teacher_name = auth_result
-                    .display_name
-                    .or(auth_result.username)
-                    .unwrap_or_else(|| "Teacher".to_string());
-
-                state.set_status(AgentStatus::Connected {
-                    teacher_name: teacher_name.clone(),
-                });
-
-                let response = StudentMessage::AuthSuccess;
-                send_message(write, &response).await?;
-
-                crate::log_debug(
-                    "info",
-                    &format!(
-                        "[StudentAgent] Teacher {} authenticated successfully (LDAP)",
-                        teacher_name
-                    ),
-                );
-
-                // AUTO-START SCREEN CAPTURE after authentication
-                start_screen_capture(addr, state, frame_tx)?;
-
-                // Get screen resolution
-                let (width, height) =
-                    screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
-
-                let ready_response = StudentMessage::ScreenReady { width, height };
-                send_message(write, &ready_response).await?;
-            } else {
-                let reason = auth_result
-                    .error
-                    .unwrap_or_else(|| "LDAP authentication failed".to_string());
-                let response = StudentMessage::AuthFailed {
-                    reason: reason.clone(),
-                };
-                send_message(write, &response).await?;
-
-                return Err(format!("LDAP authentication failed: {}", reason));
             }
         }
 
@@ -530,12 +416,16 @@ where
             }
 
             // Start screen capture
-            start_screen_capture(addr, state, frame_tx)?;
+            start_screen_capture_tcp(addr, state)?;
 
             // Get screen resolution
             let (width, height) = screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
 
-            let response = StudentMessage::ScreenReady { width, height };
+            let response = StudentMessage::ScreenReady {
+                width,
+                height,
+                video_port: VIDEO_STREAM_PORT,
+            };
             send_message(write, &response).await?;
 
             println!("[StudentAgent] Screen sharing started");
@@ -568,11 +458,11 @@ where
     Ok(())
 }
 
-/// Start screen capture for a connection
-fn start_screen_capture(
+/// Start screen capture with DIRECT WebSocket sending (no channel)
+fn start_screen_capture_direct(
     addr: SocketAddr,
     state: &Arc<AgentState>,
-    frame_tx: &mpsc::Sender<Vec<u8>>,
+    shared_writer: SharedWsWriter,
 ) -> Result<(), String> {
     // Check if already sharing
     {
@@ -597,14 +487,14 @@ fn start_screen_capture(
         }
     }
 
-    // Clone frame_tx for the capture thread
-    let frame_tx_clone = frame_tx.clone();
-
-    // Start capture in background with H.264 encoding
+    // Start capture in background with DIRECT WebSocket sending
     tokio::spawn(async move {
-        crate::log_debug("info", "[ScreenCapture] Starting H.264 capture loop");
+        crate::log_debug(
+            "info",
+            "[ScreenCapture] Starting H.264 capture loop (direct WebSocket)",
+        );
 
-        // Get initial screen resolution and monitor instance
+        // Get initial screen resolution
         let (init_width, init_height) =
             screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
 
@@ -630,12 +520,13 @@ fn start_screen_capture(
 
         let start_time = std::time::Instant::now();
         let mut frame_count: u64 = 0;
-        let target_frame_time = std::time::Duration::from_millis(33); // ~30 FPS
+        let mut ws_send_count: u64 = 0;
+        let target_frame_time = std::time::Duration::from_millis(50); // ~20 FPS to reduce load
 
         while !stop_flag_clone.load(Ordering::Relaxed) {
             let frame_start = std::time::Instant::now();
 
-            // Scope monitor so it is dropped before any await.
+            // Capture frame
             let capture_result = {
                 let monitor = match screen_capture::get_primary_monitor() {
                     Ok(m) => Some(m),
@@ -659,7 +550,7 @@ fn start_screen_capture(
                 Some(raw_frame) => {
                     let timestamp = start_time.elapsed().as_millis() as u64;
 
-                    // Encode to H.264 (encoder will auto-update dimensions if needed)
+                    // Encode to H.264
                     match encoder.encode_rgba_with_size(
                         &raw_frame.rgba_data,
                         raw_frame.width,
@@ -667,48 +558,46 @@ fn start_screen_capture(
                         timestamp,
                     ) {
                         Ok(encoded) => {
-                            // Create binary frame format:
-                            // [1 byte: frame_type]
-                            // [8 bytes: timestamp]
-                            // [4 bytes: width]
-                            // [4 bytes: height]
-                            // [2 bytes: description_length] (0 if no description)
-                            // [description_length bytes: AVCC description] (only for keyframes)
-                            // [H.264 Annex-B data]
+                            // Create binary frame
                             let desc_len = encoded.sps_pps.as_ref().map(|d| d.len()).unwrap_or(0);
                             let mut binary_frame =
                                 Vec::with_capacity(19 + desc_len + encoded.data.len());
 
-                            binary_frame.push(if encoded.is_keyframe { 1 } else { 0 }); // Frame type
-                            binary_frame.extend_from_slice(&timestamp.to_le_bytes()); // 8 bytes
-                            binary_frame.extend_from_slice(&encoded.width.to_le_bytes()); // 4 bytes
-                            binary_frame.extend_from_slice(&encoded.height.to_le_bytes()); // 4 bytes
-                            binary_frame.extend_from_slice(&(desc_len as u16).to_le_bytes()); // 2 bytes description length
+                            binary_frame.push(if encoded.is_keyframe { 1 } else { 0 });
+                            binary_frame.extend_from_slice(&timestamp.to_le_bytes());
+                            binary_frame.extend_from_slice(&encoded.width.to_le_bytes());
+                            binary_frame.extend_from_slice(&encoded.height.to_le_bytes());
+                            binary_frame.extend_from_slice(&(desc_len as u16).to_le_bytes());
 
-                            // Add AVCC description if present (keyframes only)
                             if let Some(ref desc) = encoded.sps_pps {
                                 binary_frame.extend_from_slice(desc);
                             }
-
-                            // Add Annex-B H.264 data
                             binary_frame.extend_from_slice(&encoded.data);
 
                             let frame_len = binary_frame.len();
-                            match frame_tx_clone.try_send(binary_frame) {
-                                Ok(_) => {
-                                    // Log successful channel send occasionally
-                                    static SEND_OK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                                    let ok_count = SEND_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                                    if ok_count == 1 || ok_count % 30 == 0 {
-                                        crate::log_debug("info", &format!("[ScreenCapture] Sent {} frames to channel, last size={} bytes", ok_count, frame_len));
+
+                            // DIRECTLY send via WebSocket (acquire lock, send, release)
+                            {
+                                let mut writer = shared_writer.lock().await;
+                                match writer.send(Message::Binary(binary_frame)).await {
+                                    Ok(_) => {
+                                        ws_send_count += 1;
+                                        if ws_send_count == 1 || ws_send_count % 30 == 0 {
+                                            crate::log_debug("info", &format!(
+                                                "[ScreenCapture] Sent {} frames via WebSocket, last size={} bytes",
+                                                ws_send_count, frame_len
+                                            ));
+                                        }
                                     }
-                                }
-                                Err(e) => {
-                                    // Channel full, skip this frame - log occasionally
-                                    static DROP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                                    let count = DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                                    if count == 1 || count % 30 == 0 {
-                                        crate::log_debug("warn", &format!("[ScreenCapture] Channel full, dropped {} frames total: {:?}", count, e));
+                                    Err(e) => {
+                                        crate::log_debug(
+                                            "error",
+                                            &format!(
+                                                "[ScreenCapture] WebSocket send failed: {}",
+                                                e
+                                            ),
+                                        );
+                                        break; // Exit loop on WebSocket error
                                     }
                                 }
                             }
@@ -720,7 +609,7 @@ fn start_screen_capture(
                                 crate::log_debug(
                                     "info",
                                     &format!(
-                                        "[ScreenCapture] {} frames, {:.1} FPS, keyframe={}",
+                                        "[ScreenCapture] {} frames encoded, {:.1} FPS, keyframe={}",
                                         frame_count, fps, encoded.is_keyframe
                                     ),
                                 );
@@ -735,20 +624,190 @@ fn start_screen_capture(
                     }
                 }
                 None => {
-                    // Failed to capture or get monitor; back off a bit.
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     continue;
                 }
             }
 
-            // Adaptive sleep to maintain target FPS
+            // Adaptive sleep
             let elapsed = frame_start.elapsed();
             if elapsed < target_frame_time {
                 tokio::time::sleep(target_frame_time - elapsed).await;
             }
         }
 
-        println!("[ScreenCapture] H.264 capture loop ended");
+        crate::log_debug("info", "[ScreenCapture] H.264 capture loop ended");
+    });
+
+    Ok(())
+}
+
+/// Start screen capture with TCP video streaming (NEW: separate from WebSocket control)
+fn start_screen_capture_tcp(addr: SocketAddr, state: &Arc<AgentState>) -> Result<(), String> {
+    // Check if already sharing
+    {
+        let conns = state.connections.lock().unwrap();
+        if let Some(conn) = conns.get(&addr) {
+            if conn.screen_sharing {
+                return Ok(()); // Already sharing
+            }
+        }
+    }
+
+    // Create stop flag
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_flag_clone = Arc::clone(&stop_flag);
+    let stop_flag_server = Arc::clone(&stop_flag);
+
+    // Update connection state
+    {
+        let mut conns = state.connections.lock().unwrap();
+        if let Some(conn) = conns.get_mut(&addr) {
+            conn.screen_sharing = true;
+            conn.stop_capture = Some(stop_flag);
+        }
+    }
+
+    // Create channel for video frames
+    let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<VideoFrame>(64);
+
+    // Start TCP video server
+    tokio::spawn(async move {
+        if let Err(e) = start_video_server(VIDEO_STREAM_PORT, frame_rx, stop_flag_server).await {
+            crate::log_debug(
+                "error",
+                &format!("[VideoStream] Failed to start TCP video server: {}", e),
+            );
+        }
+    });
+
+    // Wait a bit for server to start
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Start H.264 encoder and capture loop
+    tokio::spawn(async move {
+        crate::log_debug(
+            "info",
+            "[ScreenCapture] Starting H.264 capture loop (TCP streaming)",
+        );
+
+        // Get initial screen resolution
+        let (init_width, init_height) =
+            screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
+
+        // Create H.264 encoder
+        let mut encoder = match H264Encoder::new(init_width, init_height) {
+            Ok(enc) => enc,
+            Err(e) => {
+                crate::log_debug(
+                    "error",
+                    &format!("[ScreenCapture] Failed to create H.264 encoder: {}", e),
+                );
+                return;
+            }
+        };
+
+        crate::log_debug(
+            "info",
+            &format!(
+                "[ScreenCapture] H.264 encoder created for {}x{}",
+                init_width, init_height
+            ),
+        );
+
+        let start_time = std::time::Instant::now();
+        let mut frame_count: u64 = 0;
+        let target_frame_time = std::time::Duration::from_millis(50); // ~20 FPS
+
+        while !stop_flag_clone.load(Ordering::Relaxed) {
+            let frame_start = std::time::Instant::now();
+
+            // Capture frame
+            let capture_result = {
+                let monitor = match screen_capture::get_primary_monitor() {
+                    Ok(m) => Some(m),
+                    Err(e) => {
+                        crate::log_debug(
+                            "error",
+                            &format!("[ScreenCapture] Failed to get monitor: {}", e),
+                        );
+                        None
+                    }
+                };
+
+                if let Some(monitor) = monitor {
+                    screen_capture::capture_raw_frame(&monitor).ok()
+                } else {
+                    None
+                }
+            };
+
+            match capture_result {
+                Some(raw_frame) => {
+                    let timestamp = start_time.elapsed().as_millis() as u64;
+
+                    // Encode to H.264
+                    match encoder.encode_rgba_with_size(
+                        &raw_frame.rgba_data,
+                        raw_frame.width,
+                        raw_frame.height,
+                        timestamp,
+                    ) {
+                        Ok(encoded) => {
+                            // Create VideoFrame for TCP streaming
+                            let video_frame = VideoFrame {
+                                is_keyframe: encoded.is_keyframe,
+                                timestamp: encoded.timestamp,
+                                width: encoded.width,
+                                height: encoded.height,
+                                sps_pps: encoded.sps_pps,
+                                data: encoded.data,
+                            };
+
+                            // Send to TCP stream channel
+                            if frame_tx.send(video_frame).await.is_err() {
+                                crate::log_debug(
+                                    "info",
+                                    "[ScreenCapture] Video stream channel closed",
+                                );
+                                break;
+                            }
+
+                            frame_count += 1;
+                            if frame_count % 30 == 0 {
+                                let elapsed = start_time.elapsed().as_secs_f32();
+                                let fps = frame_count as f32 / elapsed;
+                                crate::log_debug(
+                                    "info",
+                                    &format!(
+                                        "[ScreenCapture] {} frames encoded, {:.1} FPS, keyframe={}",
+                                        frame_count, fps, encoded.is_keyframe
+                                    ),
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            crate::log_debug(
+                                "error",
+                                &format!("[ScreenCapture] Encode error: {}", e),
+                            );
+                        }
+                    }
+                }
+                None => {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                }
+            }
+
+            // Adaptive sleep
+            let elapsed = frame_start.elapsed();
+            if elapsed < target_frame_time {
+                tokio::time::sleep(target_frame_time - elapsed).await;
+            }
+        }
+
+        crate::log_debug("info", "[ScreenCapture] H.264 capture loop ended");
     });
 
     Ok(())
@@ -782,42 +841,15 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
         return Err("Agent already running".to_string());
     }
 
-    // Check authentication requirements based on mode
-    let auth_mode = crypto::load_auth_mode();
-
-    if auth_mode == crypto::AuthMode::Ed25519 {
-        // Ed25519 mode: require teacher's public key
-        if !crypto::has_teacher_public_key() {
-            println!("[StudentAgent] ERROR: Teacher's public key not configured!");
-            state.set_status(AgentStatus::Error {
-                message: "Chưa import khóa giáo viên".to_string(),
-            });
-            return Err("Teacher's public key not configured. Please import it first.".to_string());
-        }
-        println!("[StudentAgent] Ed25519 mode - Teacher's public key found");
-    } else {
-        // LDAP mode: require LDAP configuration
-        match crate::ldap_auth::load_ldap_config() {
-            Ok(config) => {
-                if config.server_url.is_empty() {
-                    println!("[StudentAgent] ERROR: LDAP not configured!");
-                    state.set_status(AgentStatus::Error {
-                        message: "LDAP chưa được cấu hình".to_string(),
-                    });
-                    return Err(
-                        "LDAP not configured. Please configure LDAP settings first.".to_string()
-                    );
-                }
-                println!("[StudentAgent] LDAP mode - Configuration loaded");
-            }
-            Err(e) => {
-                println!("[StudentAgent] ERROR: Failed to load LDAP config: {}", e);
-                return Err(format!("Failed to load LDAP config: {}", e));
-            }
-        }
+    // Check Ed25519 authentication requirements: require teacher's public key
+    if !crypto::has_teacher_public_key() {
+        println!("[StudentAgent] ERROR: Teacher's public key not configured!");
+        state.set_status(AgentStatus::Error {
+            message: "Chưa import khóa giáo viên".to_string(),
+        });
+        return Err("Teacher's public key not configured. Please import it first.".to_string());
     }
-
-    println!("[StudentAgent] Teacher's public key found, starting...");
+    println!("[StudentAgent] Ed25519 mode - Teacher's public key found, starting...");
     state.set_status(AgentStatus::Starting);
 
     // Get configuration

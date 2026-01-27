@@ -15,6 +15,7 @@ mod screen_capture;
 mod student_agent;
 mod teacher_connector;
 mod udp_audio;
+mod video_stream;
 
 use crypto::{KeyPairInfo, VerifyResult};
 use student_agent::{AgentConfig, AgentState, AgentStatus};
