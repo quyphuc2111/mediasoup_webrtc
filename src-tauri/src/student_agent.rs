@@ -555,18 +555,6 @@ fn start_screen_capture(
         let (init_width, init_height) =
             screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
 
-        // Get monitor instance for optimized capture
-        let monitor = match screen_capture::get_primary_monitor() {
-            Ok(m) => m,
-            Err(e) => {
-                crate::log_debug(
-                    "error",
-                    &format!("[ScreenCapture] Failed to get monitor: {}", e),
-                );
-                return;
-            }
-        };
-
         // Create H.264 encoder
         let mut encoder = match H264Encoder::new(init_width, init_height) {
             Ok(enc) => enc,
@@ -593,6 +581,20 @@ fn start_screen_capture(
 
         while !stop_flag_clone.load(Ordering::Relaxed) {
             let frame_start = std::time::Instant::now();
+
+            // Get monitor instance inside the loop to avoid holding a non-Send type across await.
+            let monitor = match screen_capture::get_primary_monitor() {
+                Ok(m) => m,
+                Err(e) => {
+                    crate::log_debug(
+                        "error",
+                        &format!("[ScreenCapture] Failed to get monitor: {}", e),
+                    );
+                    // Back off a bit before retrying.
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                }
+            };
 
             match screen_capture::capture_raw_frame(&monitor) {
                 Ok(raw_frame) => {

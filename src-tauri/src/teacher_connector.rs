@@ -315,7 +315,7 @@ async fn handle_connection(
     ip: String,
     port: u16,
     mut cmd_rx: mpsc::Receiver<ConnectionCommand>,
-    credentials: AuthCredentials,
+    _credentials: AuthCredentials,
 ) -> Result<(), String> {
     let url = format!("ws://{}:{}", ip, port);
     println!(
@@ -469,54 +469,29 @@ async fn handle_connection(
                                 continue;
                             }
 
-                            // Extract H.264 Annex-B data
-                            let h264_data = &data[desc_end..];
-
-                            // Decode H.264 to JPEG using decoder
-                            let jpeg_result = {
-                                let mut decoders = match state.decoders.lock() {
-                                    Ok(d) => d,
-                                    Err(e) => {
-                                        log::error!("[TeacherConnector] Failed to lock decoders: {}", e);
-                                        continue;
-                                    }
-                                };
-
-                                // Get or create decoder for this connection
-                                let decoder = decoders.entry(id.clone()).or_insert_with(|| {
-                                    log::info!("[TeacherConnector] H.264 decoder for connection: {}", id);
-                                    crate::h264_decoder::H264Decoder::new().unwrap()
-                                });
-
-                                // Decode H.264 to JPEG
-                                decoder.decode_to_jpeg(h264_data)
+                            // Extract AVCC description (SPS/PPS) if present
+                            let sps_pps = if desc_len > 0 {
+                                Some(data[desc_start..desc_end].to_vec())
+                            } else {
+                                None
                             };
 
-                            match jpeg_result {
-                                Ok(Some(jpeg_base64)) => {
-                                    // Successfully decoded to JPEG
-                                    let frame = ScreenFrame {
-                                        data: Some(jpeg_base64),  // JPEG base64
-                                        data_binary: None,  // No raw H.264
-                                        sps_pps: None,  // Not needed for JPEG
-                                        timestamp,
-                                        width,
-                                        height,
-                                        is_keyframe: true,  // JPEG frames are always complete
-                                        codec: "jpeg".to_string(),
-                                    };
+                            // Extract H.264 Annex-B data
+                            let h264_data = data[desc_end..].to_vec();
 
-                                    if let Ok(mut frames) = state.screen_frames.lock() {
-                                        frames.insert(id.clone(), frame);
-                                    }
-                                }
-                                Ok(None) => {
-                                    // Frame not ready yet (waiting for keyframe or incomplete)
-                                    log::debug!("[TeacherConnector] Frame not ready (waiting for keyframe)");
-                                }
-                                Err(e) => {
-                                    log::error!("[TeacherConnector] H.264 decode error for {}: {}", id, e);
-                                }
+                            let frame = ScreenFrame {
+                                data: None,
+                                data_binary: Some(h264_data),
+                                sps_pps,
+                                timestamp,
+                                width,
+                                height,
+                                is_keyframe,
+                                codec: "h264".to_string(),
+                            };
+
+                            if let Ok(mut frames) = state.screen_frames.lock() {
+                                frames.insert(id.clone(), frame);
                             }
                         }
                     }

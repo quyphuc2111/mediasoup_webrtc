@@ -18,7 +18,8 @@ pub struct H264Encoder {
     width: u32,
     height: u32,
     frame_count: Mutex<u64>,
-    keyframe_interval: u64,
+    keyframe_interval_ms: u64,
+    last_keyframe_ts: Mutex<u64>,
 }
 
 /// Encoded frame data
@@ -60,7 +61,8 @@ impl H264Encoder {
             width,
             height,
             frame_count: Mutex::new(0),
-            keyframe_interval: 30, // Keyframe every 30 frames (~1 second at 30fps)
+            keyframe_interval_ms: 1000, // Keyframe at least every 1s (time-based, robust to low FPS)
+            last_keyframe_ts: Mutex::new(0),
         })
     }
     
@@ -84,6 +86,7 @@ impl H264Encoder {
             self.width = width;
             self.height = height;
             *self.frame_count.lock().unwrap() = 0;
+            *self.last_keyframe_ts.lock().unwrap() = 0;
             crate::log_debug("info", &format!("[H264Encoder] Updated dimensions to {}x{}", width, height));
         }
         
@@ -336,9 +339,15 @@ impl H264Encoder {
         
         // Check if we need a keyframe
         let mut frame_count = self.frame_count.lock().unwrap();
-        let force_keyframe = *frame_count == 0 || *frame_count % self.keyframe_interval == 0;
+        let mut last_keyframe_ts = self.last_keyframe_ts.lock().unwrap();
+        let force_keyframe = *frame_count == 0
+            || timestamp.saturating_sub(*last_keyframe_ts) >= self.keyframe_interval_ms;
         let current_frame = *frame_count;
         *frame_count += 1;
+        if force_keyframe {
+            *last_keyframe_ts = timestamp;
+        }
+        drop(last_keyframe_ts);
         drop(frame_count);
         
         // Encode frame
@@ -373,7 +382,6 @@ impl H264Encoder {
         }
         
         // Scan for NAL units to detect keyframe and extract SPS/PPS
-        let mut is_keyframe = false;
         let mut has_sps = false;
         let mut has_pps = false;
         let mut has_idr = false;
@@ -417,7 +425,7 @@ impl H264Encoder {
         }
         
         // Keyframe if we have IDR or if forced and we have SPS/PPS
-        is_keyframe = has_idr || (force_keyframe && (has_sps || has_pps));
+        let is_keyframe = has_idr || (force_keyframe && (has_sps || has_pps));
         
         if force_keyframe && !is_keyframe {
             crate::log_debug("warn", &format!("[H264Encoder] Warning: Keyframe forced but not detected (has_idr={}, has_sps={}, has_pps={})", 
@@ -449,6 +457,7 @@ impl H264Encoder {
     /// Force next frame to be a keyframe
     pub fn request_keyframe(&self) {
         *self.frame_count.lock().unwrap() = 0;
+        *self.last_keyframe_ts.lock().unwrap() = 0;
     }
     
     /// Get current dimensions

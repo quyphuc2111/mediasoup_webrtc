@@ -94,9 +94,9 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       }
     };
 
-    // Fetch frames at ~10 FPS
+    // Fetch frames at ~30 FPS
     fetchFrames();
-    const frameInterval = setInterval(fetchFrames, 100);
+    const frameInterval = setInterval(fetchFrames, 33);
     return () => clearInterval(frameInterval);
   }, [connections]);
 
