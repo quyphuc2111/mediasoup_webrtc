@@ -115,7 +115,16 @@ export function DebugPanel() {
       addLog('error', ...args);
     };
 
-    // Custom success log
+    // Custom debug log helpers for UI components (bypass filters)
+    (window as any).debugInfo = (...args: any[]) => {
+      addLog('info', ...args);
+    };
+    (window as any).debugWarn = (...args: any[]) => {
+      addLog('warn', ...args);
+    };
+    (window as any).debugError = (...args: any[]) => {
+      addLog('error', ...args);
+    };
     (window as any).debugSuccess = (...args: any[]) => {
       addLog('success', ...args);
     };
@@ -152,6 +161,10 @@ export function DebugPanel() {
       if (unlistenTauri) {
         unlistenTauri();
       }
+      delete (window as any).debugInfo;
+      delete (window as any).debugWarn;
+      delete (window as any).debugError;
+      delete (window as any).debugSuccess;
     };
   }, []);
 

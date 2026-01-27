@@ -47,6 +47,22 @@ export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
   const pendingFramesRef = useRef<ScreenFrame[]>([]);
   const errorCountRef = useRef(0);
   const lastProcessedTimestampRef = useRef<number>(-1);
+  const debugInfo = (...args: any[]) => {
+    const w = window as any;
+    if (typeof w?.debugInfo === 'function') {
+      w.debugInfo(...args);
+    } else {
+      console.log(...args);
+    }
+  };
+  const debugWarn = (...args: any[]) => {
+    const w = window as any;
+    if (typeof w?.debugWarn === 'function') {
+      w.debugWarn(...args);
+    } else {
+      console.warn(...args);
+    }
+  };
 
   // Initialize decoder
   const initDecoder = useCallback((width: number, height: number, description?: Uint8Array) => {
@@ -98,7 +114,7 @@ export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
 
           // After 5 consecutive errors, fallback to JPEG
           if (errorCountRef.current >= 5) {
-            console.warn('[H264Player] Too many errors, falling back to JPEG');
+            debugWarn('[H264Player] Too many errors, falling back to JPEG');
             setUseFallback(true);
             setError('H.264 decode failed, using JPEG fallback');
             return;
@@ -106,7 +122,7 @@ export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
 
           // Don't set error state immediately - might be recoverable
           if (e.message && e.message.includes('decode')) {
-            console.warn('[H264Player] Decode error, will retry with next keyframe');
+            debugWarn('[H264Player] Decode error, will retry with next keyframe');
           } else {
             setError(`Decoder error: ${e.message || 'Unknown error'}`);
           }
@@ -308,6 +324,9 @@ export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
       return;
     }
 
+    debugInfo(
+      `[H264Player] Frame in: ts=${frame.timestamp} size=${frame.data_binary?.length ?? 0} key=${frame.is_keyframe} desc=${frame.sps_pps?.length ?? 0}`
+    );
     decodeFrame(frame);
   }, [frame, isInitialized, initDecoder, decodeFrame]);
 

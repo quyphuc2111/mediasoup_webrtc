@@ -45,6 +45,23 @@ interface ViewClientPageProps {
 }
 
 export function ViewClientPage({ onBack }: ViewClientPageProps) {
+  const debugInfo = (...args: any[]) => {
+    const w = window as any;
+    if (typeof w?.debugInfo === 'function') {
+      w.debugInfo(...args);
+    } else {
+      console.log(...args);
+    }
+  };
+  const debugWarn = (...args: any[]) => {
+    const w = window as any;
+    if (typeof w?.debugWarn === 'function') {
+      w.debugWarn(...args);
+    } else {
+      console.warn(...args);
+    }
+  };
+
   const [connections, setConnections] = useState<StudentConnection[]>([]);
   const [savedDevices, setSavedDevices] = useState<SavedDevice[]>([]);
   const [screenFrames, setScreenFrames] = useState<Record<string, ScreenFrame>>({});
@@ -78,14 +95,27 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       
       for (const conn of viewingConnections) {
         try {
+          const start = performance.now();
           const frame = await invoke<ScreenFrame | null>('get_student_screen_frame', {
             connectionId: conn.id,
           });
+          const elapsed = performance.now() - start;
           if (frame) {
             newFrames[conn.id] = frame;
+            if (frame.codec === 'h264') {
+              debugInfo(
+                `[ViewClient] Frame ${conn.id}: ts=${frame.timestamp} size=${frame.data_binary?.length ?? 0} key=${frame.is_keyframe} desc=${frame.sps_pps?.length ?? 0} fetch=${elapsed.toFixed(1)}ms`
+              );
+            } else {
+              debugInfo(
+                `[ViewClient] Frame ${conn.id}: codec=${frame.codec} ts=${frame.timestamp} fetch=${elapsed.toFixed(1)}ms`
+              );
+            }
+          } else {
+            debugInfo(`[ViewClient] No frame for ${conn.id} (fetch=${elapsed.toFixed(1)}ms)`);
           }
         } catch (e) {
-          // Ignore frame fetch errors
+          debugWarn('[ViewClient] get_student_screen_frame failed:', e);
         }
       }
       

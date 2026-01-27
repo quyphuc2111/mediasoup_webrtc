@@ -435,6 +435,7 @@ async fn handle_connection(
     }
 
     // Message handling loop
+    let mut binary_frame_count: u64 = 0;
     loop {
         tokio::select! {
             // Handle incoming messages from student
@@ -493,6 +494,20 @@ async fn handle_connection(
                             if let Ok(mut frames) = state.screen_frames.lock() {
                                 frames.insert(id.clone(), frame);
                             }
+
+                            binary_frame_count += 1;
+                            if binary_frame_count % 30 == 0 {
+                                log::info!(
+                                    "[TeacherConnector] Received H.264 frames for {}: count={}, size={} bytes, keyframe={}, desc_len={}",
+                                    id,
+                                    binary_frame_count,
+                                    data.len(),
+                                    is_keyframe,
+                                    desc_len
+                                );
+                            }
+                        } else {
+                            log::warn!("[TeacherConnector] Ignored short binary frame: {} bytes", data.len());
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
