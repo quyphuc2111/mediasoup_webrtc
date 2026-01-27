@@ -3,7 +3,7 @@
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    BufferSize, Device, Host, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig,
+    BufferSize, Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig,
 };
 use std::sync::{Arc, Mutex};
 use std::collections::VecDeque;
@@ -166,4 +166,3 @@ impl AudioCapture {
         buffer.len() >= count
     }
 }
-

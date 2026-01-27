@@ -582,22 +582,28 @@ fn start_screen_capture(
         while !stop_flag_clone.load(Ordering::Relaxed) {
             let frame_start = std::time::Instant::now();
 
-            // Get monitor instance inside the loop to avoid holding a non-Send type across await.
-            let monitor = match screen_capture::get_primary_monitor() {
-                Ok(m) => m,
-                Err(e) => {
-                    crate::log_debug(
-                        "error",
-                        &format!("[ScreenCapture] Failed to get monitor: {}", e),
-                    );
-                    // Back off a bit before retrying.
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    continue;
+            // Scope monitor so it is dropped before any await.
+            let capture_result = {
+                let monitor = match screen_capture::get_primary_monitor() {
+                    Ok(m) => Some(m),
+                    Err(e) => {
+                        crate::log_debug(
+                            "error",
+                            &format!("[ScreenCapture] Failed to get monitor: {}", e),
+                        );
+                        None
+                    }
+                };
+
+                if let Some(monitor) = monitor {
+                    screen_capture::capture_raw_frame(&monitor).ok()
+                } else {
+                    None
                 }
             };
 
-            match screen_capture::capture_raw_frame(&monitor) {
-                Ok(raw_frame) => {
+            match capture_result {
+                Some(raw_frame) => {
                     let timestamp = start_time.elapsed().as_millis() as u64;
 
                     // Encode to H.264 (encoder will auto-update dimensions if needed)
@@ -659,8 +665,10 @@ fn start_screen_capture(
                         }
                     }
                 }
-                Err(e) => {
-                    println!("[ScreenCapture] Capture error: {}", e);
+                None => {
+                    // Failed to capture or get monitor; back off a bit.
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
                 }
             }
 
