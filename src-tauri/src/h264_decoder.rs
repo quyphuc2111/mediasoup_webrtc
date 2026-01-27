@@ -52,18 +52,11 @@ impl H264Decoder {
                 self.width = width;
                 self.height = height;
 
-                // Get YUV planes manually to convert to RGB properly
-                let y_plane = yuv.y();
-                let u_plane = yuv.u();
-                let v_plane = yuv.v();
-                // For standard YUV420, strides equal the plane widths
-                let y_stride = width as usize;
-                let uv_stride = (width / 2) as usize;
+                // Use DecodedYUV's built-in write_rgb8 which handles YUV to RGB conversion correctly
+                let rgb_size = (width * height * 3) as usize;
+                let mut rgb_data = vec![0u8; rgb_size];
+                yuv.write_rgb8(&mut rgb_data);
 
-                // Convert YUV420 to RGB manually (ensures correct RGB order, not BGR)
-                let rgb_data = yuv420_to_rgb(
-                    y_plane, u_plane, v_plane, y_stride, uv_stride, width, height,
-                );
                 let jpeg_data = rgb_to_jpeg(&rgb_data, width, height)?;
 
                 // Encode to base64
@@ -83,64 +76,6 @@ impl H264Decoder {
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
     }
-}
-
-/// Convert YUV420 planar to RGB24
-fn yuv420_to_rgb(
-    y_plane: &[u8],
-    u_plane: &[u8],
-    v_plane: &[u8],
-    y_stride: usize,
-    uv_stride: usize,
-    width: u32,
-    height: u32,
-) -> Vec<u8> {
-    let width = width as usize;
-    let height = height as usize;
-    let mut rgb = vec![0u8; width * height * 3];
-
-    for y in 0..height {
-        for x in 0..width {
-            // Get Y value
-            let y_idx = y * y_stride + x;
-            let y_val = if y_idx < y_plane.len() {
-                y_plane[y_idx] as i32
-            } else {
-                16 // Default luma value
-            };
-
-            // Get U and V values (subsampled 4:2:0)
-            let uv_y = y / 2;
-            let uv_x = x / 2;
-            let uv_idx = uv_y * uv_stride + uv_x;
-
-            let u_val = if uv_idx < u_plane.len() {
-                u_plane[uv_idx] as i32 - 128
-            } else {
-                0
-            };
-
-            let v_val = if uv_idx < v_plane.len() {
-                v_plane[uv_idx] as i32 - 128
-            } else {
-                0
-            };
-
-            // Convert YUV to RGB using ITU-R BT.601
-            let r = (y_val + ((1.402 * v_val as f32) as i32)).clamp(0, 255);
-            let g = (y_val - ((0.344 * u_val as f32) as i32) - ((0.714 * v_val as f32) as i32))
-                .clamp(0, 255);
-            let b = (y_val + ((1.772 * u_val as f32) as i32)).clamp(0, 255);
-
-            // Store RGB
-            let rgb_idx = (y * width + x) * 3;
-            rgb[rgb_idx] = r as u8;
-            rgb[rgb_idx + 1] = g as u8;
-            rgb[rgb_idx + 2] = b as u8;
-        }
-    }
-
-    rgb
 }
 
 /// Encode RGB24 data to JPEG
