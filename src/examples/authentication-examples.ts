@@ -5,7 +5,7 @@
  * in the frontend application.
  */
 
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 
 // ============================================================
 // Type Definitions
@@ -262,13 +262,16 @@ export async function setupLDAPMode(config: LdapConfig): Promise<void> {
 export function LoginComponentExample() {
     // This is pseudo-code showing the logic flow
 
-    const handleLogin = async () => {
+    const _handleLogin = async () => {
         const authMode = await getAuthMode();
+        const username = "user"; // Dummy
+        const password = "password"; // Dummy
 
         if (authMode === 'Ed25519') {
             // Ed25519: No password needed, just connect
-            const connectionId = await connectWithEd25519('192.168.1.100');
+            const _connectionId = await connectWithEd25519('192.168.1.100');
             // Navigate to screen viewing
+            console.log(_connectionId);
 
         } else if (authMode === 'Ldap') {
             // LDAP: Need username & password
@@ -284,29 +287,36 @@ export function LoginComponentExample() {
             }
         }
     };
+
+    // Suppress unused warning
+    void _handleLogin;
 }
 
 /**
  * Example: Settings component for auth mode selection
  */
 export function SettingsComponentExample() {
-    const switchToEd25519 = async () => {
+    const _switchToEd25519 = async () => {
         await setAuthMode('Ed25519');
         // Show keypair generation UI
     };
 
-    const switchToLDAP = async () => {
+    const _switchToLDAP = async () => {
         // Show LDAP configuration form
         const config = LDAP_CONFIG_EXAMPLES.activeDirectory;
         await setupLDAPMode(config);
     };
+
+    // Suppress unused warning
+    void _switchToEd25519;
+    void _switchToLDAP;
 }
 
 /**
  * Example: LDAP Configuration Form Handler
  */
 export function LdapConfigFormExample() {
-    const handleSubmit = async (formData: LdapConfig) => {
+    const _handleSubmit = async (formData: LdapConfig) => {
         try {
             // Test connection first
             await testLdapConnection(formData);
@@ -319,6 +329,9 @@ export function LdapConfigFormExample() {
             alert('Configuration test failed: ' + error);
         }
     };
+
+    // Suppress unused warning
+    void _handleSubmit;
 }
 
 // ============================================================

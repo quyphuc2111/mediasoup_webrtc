@@ -40,7 +40,7 @@ export const AuthSettings: React.FC = () => {
         use_tls: false,
     });
     const [keypair, setKeypair] = useState<KeyPairInfo | null>(null);
-    const [hasKeypair, setHasKeypair] = useState(false);
+    // const [hasKeypair, setHasKeypair] = useState(false); // Removed unused state
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
     const [testingConnection, setTestingConnection] = useState(false);
@@ -66,7 +66,7 @@ export const AuthSettings: React.FC = () => {
 
             // Check if keypair exists
             const hasKey = await invoke<boolean>('crypto_has_keypair');
-            setHasKeypair(hasKey);
+            // setHasKeypair(hasKey); 
 
             if (hasKey) {
                 const kp = await invoke<KeyPairInfo>('crypto_load_keypair');
@@ -96,7 +96,7 @@ export const AuthSettings: React.FC = () => {
         }
     };
 
-    const handleLdapConfigChange = (field: keyof LdapConfig, value: string | boolean) => {
+    const handleLdapConfigChange = (field: keyof LdapConfig, value: string | boolean | null) => {
         setLdapConfig(prev => ({
             ...prev,
             [field]: value,
@@ -138,7 +138,7 @@ export const AuthSettings: React.FC = () => {
         try {
             const newKeypair = await invoke<KeyPairInfo>('crypto_generate_keypair');
             setKeypair(newKeypair);
-            setHasKeypair(true);
+            // setHasKeypair(true);
             showMessage('success', `Keypair generated! Fingerprint: ${newKeypair.fingerprint}`);
         } catch (error) {
             showMessage('error', `Failed to generate keypair: ${error}`);
