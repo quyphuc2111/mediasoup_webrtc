@@ -10,6 +10,7 @@ mod database;
 mod h264_decoder;
 mod h264_encoder;
 mod lan_discovery;
+mod ldap_auth;
 mod screen_capture;
 mod student_agent;
 mod teacher_connector;
@@ -786,6 +787,54 @@ fn crypto_generate_challenge() -> String {
 }
 
 // ============================================================
+// Authentication Mode Commands
+// ============================================================
+
+/// Set authentication mode (Ed25519 or LDAP)
+#[tauri::command]
+fn auth_set_mode(mode: crypto::AuthMode) -> Result<(), String> {
+    crypto::save_auth_mode(mode)
+}
+
+/// Get current authentication mode
+#[tauri::command]
+fn auth_get_mode() -> crypto::AuthMode {
+    crypto::load_auth_mode()
+}
+
+// ============================================================
+// LDAP Authentication Commands
+// ============================================================
+
+/// Save LDAP configuration
+#[tauri::command]
+fn ldap_save_config(config: ldap_auth::LdapConfig) -> Result<(), String> {
+    ldap_auth::save_ldap_config(&config)
+}
+
+/// Load LDAP configuration
+#[tauri::command]
+fn ldap_load_config() -> Result<ldap_auth::LdapConfig, String> {
+    ldap_auth::load_ldap_config()
+}
+
+/// Test LDAP connection
+#[tauri::command]
+async fn ldap_test_connection(config: ldap_auth::LdapConfig) -> Result<String, String> {
+    ldap_auth::test_ldap_connection(&config).await
+}
+
+/// Authenticate user with LDAP
+#[tauri::command]
+async fn ldap_authenticate(
+    config: ldap_auth::LdapConfig,
+    username: String,
+    password: String,
+) -> ldap_auth::LdapAuthResult {
+    ldap_auth::authenticate_ldap(&config, &username, &password).await
+}
+
+// ============================================================
 // Student Agent Commands
 // ============================================================
 
@@ -1035,6 +1084,14 @@ pub fn run() {
             crypto_sign_challenge,
             crypto_verify_signature,
             crypto_generate_challenge,
+            // Auth mode commands
+            auth_set_mode,
+            auth_get_mode,
+            // LDAP commands
+            ldap_save_config,
+            ldap_load_config,
+            ldap_test_connection,
+            ldap_authenticate,
             // Student Agent commands
             start_student_agent,
             stop_student_agent,

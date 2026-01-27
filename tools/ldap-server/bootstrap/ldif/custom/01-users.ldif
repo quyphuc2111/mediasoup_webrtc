@@ -1,0 +1,58 @@
+# Structure
+dn: ou=People,dc=school,dc=local
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=school,dc=local
+objectClass: organizationalUnit
+ou: Groups
+
+# Groups
+dn: cn=Teachers,ou=Groups,dc=school,dc=local
+objectClass: posixGroup
+cn: Teachers
+gidNumber: 5000
+
+dn: cn=Students,ou=Groups,dc=school,dc=local
+objectClass: posixGroup
+cn: Students
+gidNumber: 5001
+
+# Users
+# Teacher 1
+dn: uid=teacher1,ou=People,dc=school,dc=local
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: teacher1
+sn: Teacher
+givenName: One
+cn: Teacher One
+displayName: Teacher One
+uidNumber: 1001
+gidNumber: 5000
+userPassword: password
+homeDirectory: /home/teacher1
+loginShell: /bin/bash
+
+# Student 1
+dn: uid=student1,ou=People,dc=school,dc=local
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: student1
+sn: Student
+givenName: One
+cn: Student One
+displayName: Student One
+uidNumber: 1002
+gidNumber: 5001
+userPassword: password
+homeDirectory: /home/student1
+loginShell: /bin/bash
+
+# Add Teacher1 to Teachers Group (MemberUid style for posixGroup)
+dn: cn=Teachers,ou=Groups,dc=school,dc=local
+changetype: modify
+add: memberUid
+memberUid: teacher1

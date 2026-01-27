@@ -42,7 +42,8 @@ pub enum StudentMessage {
     #[serde(rename = "welcome")]
     Welcome {
         student_name: String,
-        challenge: String,
+        auth_mode: String,         // "Ed25519" or "Ldap"
+        challenge: Option<String>, // Base64 encoded (Ed25519 only)
     },
 
     #[serde(rename = "auth_success")]
@@ -78,6 +79,9 @@ pub enum StudentMessage {
 pub enum TeacherMessage {
     #[serde(rename = "auth_response")]
     AuthResponse { signature: String },
+
+    #[serde(rename = "ldap_auth")]
+    LdapAuth { username: String, password: String },
 
     #[serde(rename = "request_screen")]
     RequestScreen,
@@ -176,11 +180,28 @@ impl ConnectorState {
     }
 }
 
+/// Authentication credentials for teacher
+#[derive(Clone)]
+pub enum AuthCredentials {
+    Ed25519, // Use Ed25519 keypair (default)
+    Ldap { username: String, password: String },
+}
+
 /// Connect to a student agent
 pub async fn connect_to_student(
     state: Arc<ConnectorState>,
     ip: String,
     port: u16,
+) -> Result<String, String> {
+    connect_to_student_with_auth(state, ip, port, AuthCredentials::Ed25519).await
+}
+
+/// Connect to a student agent with specific authentication
+pub async fn connect_to_student_with_auth(
+    state: Arc<ConnectorState>,
+    ip: String,
+    port: u16,
+    credentials: AuthCredentials,
 ) -> Result<String, String> {
     // Generate connection ID
     let id = format!("{}:{}", ip, port);
@@ -225,10 +246,18 @@ pub async fn connect_to_student(
     let state_clone = Arc::clone(&state);
     let id_clone = id.clone();
     let ip_clone = ip.clone();
+    let credentials_clone = credentials.clone();
 
     tokio::spawn(async move {
-        if let Err(e) =
-            handle_connection(state_clone, id_clone.clone(), ip_clone, port, cmd_rx).await
+        if let Err(e) = handle_connection(
+            state_clone,
+            id_clone.clone(),
+            ip_clone,
+            port,
+            cmd_rx,
+            credentials_clone,
+        )
+        .await
         {
             log::error!("[TeacherConnector] Connection error: {}", e);
         }
@@ -256,7 +285,15 @@ pub async fn handle_connection_async(
         senders.insert(id.clone(), cmd_tx);
     }
 
-    let result = handle_connection(Arc::clone(&state), id.clone(), ip.clone(), port, cmd_rx).await;
+    let result = handle_connection(
+        Arc::clone(&state),
+        id.clone(),
+        ip.clone(),
+        port,
+        cmd_rx,
+        AuthCredentials::Ed25519,
+    )
+    .await;
 
     // Cleanup on error
     if result.is_err() {
@@ -278,6 +315,7 @@ async fn handle_connection(
     ip: String,
     port: u16,
     mut cmd_rx: mpsc::Receiver<ConnectionCommand>,
+    credentials: AuthCredentials,
 ) -> Result<(), String> {
     let url = format!("ws://{}:{}", ip, port);
     println!(
@@ -297,7 +335,7 @@ async fn handle_connection(
 
     state.update_status(&id, ConnectionStatus::Authenticating);
 
-    // Wait for welcome message with challenge
+    // Wait for welcome message with auth mode info
     let welcome_msg = read
         .next()
         .await
@@ -312,28 +350,48 @@ async fn handle_connection(
     let welcome: StudentMessage =
         serde_json::from_str(&welcome_text).map_err(|e| format!("Invalid welcome: {}", e))?;
 
-    let (student_name, challenge) = match welcome {
+    let (student_name, auth_mode, challenge_opt) = match welcome {
         StudentMessage::Welcome {
             student_name,
+            auth_mode,
             challenge,
-        } => (student_name, challenge),
+        } => (student_name, auth_mode, challenge),
         _ => return Err("Expected welcome message".to_string()),
     };
 
     state.update_name(&id, student_name);
 
-    // Sign the challenge
-    let keypair = crypto::load_keypair().map_err(|e| format!("Failed to load keypair: {}", e))?;
+    println!("[TeacherConnector] Student auth mode: {}", auth_mode);
 
-    let challenge_bytes =
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &challenge)
-            .map_err(|e| format!("Invalid challenge: {}", e))?;
+    // Authenticate based on mode
+    let auth_msg = if auth_mode == "Ed25519" {
+        // Ed25519 authentication
+        let challenge = challenge_opt.ok_or("No challenge provided for Ed25519 mode")?;
 
-    let signature = crypto::sign_challenge(&keypair.private_key, &challenge_bytes)
-        .map_err(|e| format!("Failed to sign: {}", e))?;
+        let keypair =
+            crypto::load_keypair().map_err(|e| format!("Failed to load keypair: {}", e))?;
 
-    // Send auth response
-    let auth_msg = TeacherMessage::AuthResponse { signature };
+        let challenge_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &challenge)
+                .map_err(|e| format!("Invalid challenge: {}", e))?;
+
+        let signature = crypto::sign_challenge(&keypair.private_key, &challenge_bytes)
+            .map_err(|e| format!("Failed to sign: {}", e))?;
+
+        TeacherMessage::AuthResponse { signature }
+    } else if auth_mode == "Ldap" {
+        // LDAP authentication - for now, return error asking for credentials
+        // In a full implementation, this would come from UI
+        return Err(
+            "LDAP mode detected. Please use connect_to_student_with_ldap() \
+             or implement UI for LDAP credentials."
+                .to_string(),
+        );
+    } else {
+        return Err(format!("Unknown auth mode: {}", auth_mode));
+    };
+
+    // Send auth message
     let auth_json =
         serde_json::to_string(&auth_msg).map_err(|e| format!("Serialize error: {}", e))?;
 

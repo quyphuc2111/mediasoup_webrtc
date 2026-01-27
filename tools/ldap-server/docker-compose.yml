@@ -1,0 +1,42 @@
+version: '3'
+
+services:
+  openldap:
+    image: osixia/openldap:latest
+    container_name: smartlab-ldap
+    environment:
+      # Domain config: dc=school,dc=local
+      LDAP_ORGANISATION: "SmartLab School"
+      LDAP_DOMAIN: "school.local"
+      LDAP_ADMIN_PASSWORD: "admin"
+      
+      # TLS defaults (auto-generated)
+      LDAP_TLS_VERIFY_CLIENT: "try"
+    ports:
+      - "389:389"
+      - "636:636"
+    volumes:
+      - ./data/ldap/var:/var/lib/ldap
+      - ./data/ldap/config:/etc/ldap/slapd.d
+      # Seed data script
+      - ./bootstrap:/container/service/slapd/assets/config/bootstrap
+    command: --copy-service
+    networks:
+      - smartlab-net
+
+  phpldapadmin:
+    image: osixia/phpldapadmin:latest
+    container_name: smartlab-ldap-admin
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: "openldap"
+      PHPLDAPADMIN_HTTPS: "false"
+    ports:
+      - "8080:80"
+    depends_on:
+      - openldap
+    networks:
+      - smartlab-net
+
+networks:
+  smartlab-net:
+    driver: bridge

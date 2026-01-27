@@ -1,0 +1,28 @@
+# AUTO-GENERATED FILE - DO NOT EDIT!! Use ldapmodify.
+# CRC32 cd6bd97a
+dn: olcDatabase={1}mdb
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: {1}mdb
+olcDbDirectory: /var/lib/ldap
+olcSuffix: dc=school,dc=local
+olcAccess: {0}to attrs=userPassword by self write by anonymous auth by * non
+ e
+olcAccess: {1}to attrs=shadowLastChange by self write by * read
+olcAccess: {2}to * by * read
+olcLastMod: TRUE
+olcRootDN: cn=admin,dc=school,dc=local
+olcRootPW:: e1NTSEF9eWpob3ZsTk1IY0p4MVRLZmtScm11dDFhMmJiTkVlakg=
+olcDbCheckpoint: 512 30
+olcDbIndex: objectClass eq
+olcDbIndex: cn,uid eq
+olcDbIndex: uidNumber,gidNumber eq
+olcDbIndex: member,memberUid eq
+olcDbMaxSize: 1073741824
+structuralObjectClass: olcMdbConfig
+entryUUID: c3c733dc-8f76-1040-9e39-a5a3dc31bd33
+creatorsName: cn=admin,cn=config
+createTimestamp: 20260127025103Z
+entryCSN: 20260127025103.800687Z#000000#000#000000
+modifiersName: cn=admin,cn=config
+modifyTimestamp: 20260127025103Z
