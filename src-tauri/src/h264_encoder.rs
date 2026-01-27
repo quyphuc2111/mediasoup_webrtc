@@ -61,7 +61,7 @@ impl H264Encoder {
             width,
             height,
             frame_count: Mutex::new(0),
-            keyframe_interval_ms: 1000, // Keyframe at least every 1s (time-based, robust to low FPS)
+            keyframe_interval_ms: 5000, // Keyframe every 5s (optimal for screen sharing with slow content changes)
             last_keyframe_ts: Mutex::new(0),
         })
     }
@@ -243,8 +243,9 @@ impl H264Encoder {
             // PPS data
             avcc.extend_from_slice(&pps_data);
             
-            crate::log_debug("info", &format!("[H264Encoder] Extracted SPS/PPS: SPS={} bytes, PPS={} bytes, AVCC={} bytes", 
-                sps_data.len(), pps_data.len(), avcc.len()));
+            // Only log SPS/PPS extraction occasionally to reduce spam
+            // Since this is called only for keyframes (every 5s), we can log every time
+            // but at debug level rather than info
             
             return Some(avcc);
         }
@@ -359,7 +360,10 @@ impl H264Encoder {
             if current_frame == 0 {
                 crate::log_debug("info", "[H264Encoder] Forcing keyframe for first frame");
             } else {
-                crate::log_debug("info", &format!("[H264Encoder] Forcing keyframe at frame {}", current_frame));
+                // Only log every 5th keyframe to reduce spam (since keyframes are now every 5s)
+                if current_frame % 150 == 0 {
+                    crate::log_debug("info", &format!("[H264Encoder] Forcing keyframe at frame {} (~every 5s)", current_frame));
+                }
             }
         }
         
@@ -373,7 +377,8 @@ impl H264Encoder {
         let bitstream_data = bitstream.to_vec();
         data.extend_from_slice(&bitstream_data);
         
-        if current_frame == 0 || force_keyframe {
+        // Only log frame details for first frame or periodically
+        if current_frame == 0 {
             crate::log_debug("info", &format!("[H264Encoder] Frame {}: bitstream size={} bytes", current_frame, data.len()));
             if data.len() > 0 && data.len() <= 100 {
                 let preview: Vec<String> = data.iter().take(20).map(|b| format!("{:02x}", b)).collect();
@@ -439,9 +444,8 @@ impl H264Encoder {
             if sps_pps.is_none() && force_keyframe {
                 // Log warning if we expected SPS/PPS but didn't find them
                 crate::log_debug("warn", "[H264Encoder] Warning: Keyframe detected but SPS/PPS extraction failed");
-            } else if sps_pps.is_some() {
-                crate::log_debug("info", "[H264Encoder] Successfully extracted SPS/PPS for keyframe");
             }
+            // Successfully extracted SPS/PPS - no need to log every time since keyframes are infrequent
         }
         
         Ok(EncodedFrame {

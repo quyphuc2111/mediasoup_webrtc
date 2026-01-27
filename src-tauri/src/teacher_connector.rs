@@ -466,7 +466,10 @@ async fn handle_connection(
                             let desc_end = desc_start + desc_len;
 
                             if desc_end > data.len() {
-                                log::warn!("[TeacherConnector] Invalid frame format: description length exceeds data");
+                                crate::log_debug(
+                                    "warn",
+                                    "[TeacherConnector] Invalid frame format: description length exceeds data",
+                                );
                                 continue;
                             }
 
@@ -496,18 +499,24 @@ async fn handle_connection(
                             }
 
                             binary_frame_count += 1;
-                            if binary_frame_count % 30 == 0 {
-                                log::info!(
-                                    "[TeacherConnector] Received H.264 frames for {}: count={}, size={} bytes, keyframe={}, desc_len={}",
-                                    id,
-                                    binary_frame_count,
-                                    data.len(),
-                                    is_keyframe,
-                                    desc_len
+                            if binary_frame_count == 1 || binary_frame_count % 30 == 0 {
+                                crate::log_debug(
+                                    "info",
+                                    &format!(
+                                        "[TeacherConnector] Received H.264 frames for {}: count={}, size={} bytes, keyframe={}, desc_len={}",
+                                        id,
+                                        binary_frame_count,
+                                        data.len(),
+                                        is_keyframe,
+                                        desc_len
+                                    ),
                                 );
                             }
                         } else {
-                            log::warn!("[TeacherConnector] Ignored short binary frame: {} bytes", data.len());
+                            crate::log_debug(
+                                "warn",
+                                &format!("[TeacherConnector] Ignored short binary frame: {} bytes", data.len()),
+                            );
                         }
                     }
                     Some(Ok(Message::Close(_))) => {

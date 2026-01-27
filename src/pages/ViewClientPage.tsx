@@ -90,6 +90,9 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     const viewingConnections = connections.filter(c => c.status === 'Viewing');
     if (viewingConnections.length === 0) return;
 
+    // Track no-frame occurrences per connection to reduce log spam
+    const noFrameCounts = new Map<string, number>();
+
     const fetchFrames = async () => {
       const newFrames: Record<string, ScreenFrame> = {};
       
@@ -102,6 +105,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
           const elapsed = performance.now() - start;
           if (frame) {
             newFrames[conn.id] = frame;
+            noFrameCounts.set(conn.id, 0); // Reset counter on successful frame
             if (frame.codec === 'h264') {
               debugInfo(
                 `[ViewClient] Frame ${conn.id}: ts=${frame.timestamp} size=${frame.data_binary?.length ?? 0} key=${frame.is_keyframe} desc=${frame.sps_pps?.length ?? 0} fetch=${elapsed.toFixed(1)}ms`
@@ -112,7 +116,12 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
               );
             }
           } else {
-            debugInfo(`[ViewClient] No frame for ${conn.id} (fetch=${elapsed.toFixed(1)}ms)`);
+            // Only log "No frame" every 20 polls (~1 second) to reduce spam
+            const count = (noFrameCounts.get(conn.id) || 0) + 1;
+            noFrameCounts.set(conn.id, count);
+            if (count === 1 || count % 20 === 0) {
+              debugInfo(`[ViewClient] No frame for ${conn.id} (${count} consecutive, fetch=${elapsed.toFixed(1)}ms)`);
+            }
           }
         } catch (e) {
           debugWarn('[ViewClient] get_student_screen_frame failed:', e);
@@ -124,9 +133,10 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       }
     };
 
-    // Fetch frames at ~30 FPS
+    // Fetch frames at ~20 FPS (matches actual server encoding rate of ~17-20 FPS)
+    // This reduces "No frame" messages and polling overhead
     fetchFrames();
-    const frameInterval = setInterval(fetchFrames, 33);
+    const frameInterval = setInterval(fetchFrames, 50);
     return () => clearInterval(frameInterval);
   }, [connections]);
 
