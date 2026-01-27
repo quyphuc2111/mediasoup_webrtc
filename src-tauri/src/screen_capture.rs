@@ -180,14 +180,18 @@ pub struct RawFrame {
     pub height: u32,
 }
 
-/// Capture a raw RGBA frame (for H.264 encoding)
-pub fn capture_raw_frame() -> Result<RawFrame, String> {
+/// Get the primary monitor
+pub fn get_primary_monitor() -> Result<Monitor, String> {
     let monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
 
-    let monitor = monitors
-        .first()
-        .ok_or_else(|| "No monitors found".to_string())?;
+    monitors
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No monitors found".to_string())
+}
 
+/// Capture a raw RGBA frame (for H.264 encoding)
+pub fn capture_raw_frame(monitor: &Monitor) -> Result<RawFrame, String> {
     let image = monitor
         .capture_image()
         .map_err(|e| format!("Failed to capture screen: {}", e))?;

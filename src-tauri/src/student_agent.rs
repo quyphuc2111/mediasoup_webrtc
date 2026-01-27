@@ -551,9 +551,21 @@ fn start_screen_capture(
     tokio::spawn(async move {
         crate::log_debug("info", "[ScreenCapture] Starting H.264 capture loop");
 
-        // Get initial screen resolution
+        // Get initial screen resolution and monitor instance
         let (init_width, init_height) =
             screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
+
+        // Get monitor instance for optimized capture
+        let monitor = match screen_capture::get_primary_monitor() {
+            Ok(m) => m,
+            Err(e) => {
+                crate::log_debug(
+                    "error",
+                    &format!("[ScreenCapture] Failed to get monitor: {}", e),
+                );
+                return;
+            }
+        };
 
         // Create H.264 encoder
         let mut encoder = match H264Encoder::new(init_width, init_height) {
@@ -577,9 +589,12 @@ fn start_screen_capture(
 
         let start_time = std::time::Instant::now();
         let mut frame_count: u64 = 0;
+        let target_frame_time = std::time::Duration::from_millis(33); // ~30 FPS
 
         while !stop_flag_clone.load(Ordering::Relaxed) {
-            match screen_capture::capture_raw_frame() {
+            let frame_start = std::time::Instant::now();
+
+            match screen_capture::capture_raw_frame(&monitor) {
                 Ok(raw_frame) => {
                     let timestamp = start_time.elapsed().as_millis() as u64;
 
@@ -594,6 +609,7 @@ fn start_screen_capture(
                             // Create binary frame format:
                             // [1 byte: frame_type]
                             // [8 bytes: timestamp]
+                            // [4 bytes: width]
                             // [4 bytes: height]
                             // [2 bytes: description_length] (0 if no description)
                             // [description_length bytes: AVCC description] (only for keyframes)
@@ -646,8 +662,11 @@ fn start_screen_capture(
                 }
             }
 
-            // ~30 FPS (H.264 can handle higher frame rate efficiently)
-            tokio::time::sleep(tokio::time::Duration::from_millis(33)).await;
+            // Adaptive sleep to maintain target FPS
+            let elapsed = frame_start.elapsed();
+            if elapsed < target_frame_time {
+                tokio::time::sleep(target_frame_time - elapsed).await;
+            }
         }
 
         println!("[ScreenCapture] H.264 capture loop ended");
