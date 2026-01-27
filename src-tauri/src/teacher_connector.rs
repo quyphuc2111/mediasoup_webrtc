@@ -447,6 +447,11 @@ async fn handle_connection(
                         }
                     }
                     Some(Ok(Message::Binary(data))) => {
+                        // Log first binary message immediately for debugging
+                        if binary_frame_count == 0 {
+                            crate::log_debug("info", &format!("[TeacherConnector] First binary message received: {} bytes", data.len()));
+                        }
+                        
                         // H.264 frame format:
                         // [1 byte: frame_type]
                         // [8 bytes: timestamp]

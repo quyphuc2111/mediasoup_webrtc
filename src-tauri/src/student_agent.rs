@@ -208,8 +208,8 @@ async fn handle_connection(
         );
     }
 
-    // Channel for screen frames
-    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(2);
+    // Channel for screen frames - increased capacity for smooth streaming
+    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(30);
 
     // Get student name
     let student_name = state
@@ -268,9 +268,20 @@ async fn handle_connection(
             // Handle screen frames - send as binary for efficiency
             // Frame format: [1 byte type] [8 bytes timestamp] [4 bytes width] [4 bytes height] [H.264 data]
             Some(frame_data) = frame_rx.recv() => {
+                let frame_size = frame_data.len();
                 // Send as binary WebSocket message (already formatted by capture loop)
-                if let Err(e) = write.send(Message::Binary(frame_data)).await {
-                    log::error!("[StudentAgent] Failed to send frame: {}", e);
+                match write.send(Message::Binary(frame_data)).await {
+                    Ok(_) => {
+                        // Log every 30th frame to avoid spam
+                        static SEND_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                        let count = SEND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if count == 1 || count % 30 == 0 {
+                            crate::log_debug("info", &format!("[StudentAgent] Sent {} frames via WebSocket, last size={} bytes", count, frame_size));
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("[StudentAgent] Failed to send frame: {}", e);
+                    }
                 }
             }
             // Handle shutdown signal
@@ -640,8 +651,24 @@ fn start_screen_capture(
                             // Add Annex-B H.264 data
                             binary_frame.extend_from_slice(&encoded.data);
 
-                            if frame_tx_clone.try_send(binary_frame).is_err() {
-                                // Channel full, skip this frame
+                            let frame_len = binary_frame.len();
+                            match frame_tx_clone.try_send(binary_frame) {
+                                Ok(_) => {
+                                    // Log successful channel send occasionally
+                                    static SEND_OK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                    let ok_count = SEND_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                                    if ok_count == 1 || ok_count % 30 == 0 {
+                                        crate::log_debug("info", &format!("[ScreenCapture] Sent {} frames to channel, last size={} bytes", ok_count, frame_len));
+                                    }
+                                }
+                                Err(e) => {
+                                    // Channel full, skip this frame - log occasionally
+                                    static DROP_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                    let count = DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                                    if count == 1 || count % 30 == 0 {
+                                        crate::log_debug("warn", &format!("[ScreenCapture] Channel full, dropped {} frames total: {:?}", count, e));
+                                    }
+                                }
                             }
 
                             frame_count += 1;
