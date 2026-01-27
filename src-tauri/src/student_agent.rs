@@ -13,7 +13,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex as TokioMutex};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::crypto;
@@ -237,17 +237,68 @@ async fn handle_connection(
 
     state.set_status(AgentStatus::Authenticating);
 
-    // Message handling loop
+    // Use Arc<Mutex> for the write half so it can be shared between tasks
+    let write = Arc::new(TokioMutex::new(write));
+    let write_for_frames = Arc::clone(&write);
+    
+    // Channel to signal frame sender to stop
+    let (frame_stop_tx, mut frame_stop_rx) = oneshot::channel::<()>();
+    
+    // Spawn a dedicated task for sending frames via WebSocket
+    // This ensures frames are sent independently of message handling
+    let frame_sender_handle = tokio::spawn(async move {
+        crate::log_debug("info", "[StudentAgent] Frame sender task started");
+        loop {
+            tokio::select! {
+                biased;  // Check stop signal first
+                
+                _ = &mut frame_stop_rx => {
+                    crate::log_debug("info", "[StudentAgent] Frame sender task stopping");
+                    break;
+                }
+                
+                frame_opt = frame_rx.recv() => {
+                    match frame_opt {
+                        Some(frame_data) => {
+                            let frame_size = frame_data.len();
+                            let mut writer = write_for_frames.lock().await;
+                            match writer.send(Message::Binary(frame_data)).await {
+                                Ok(_) => {
+                                    static SEND_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                                    let count = SEND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                                    if count == 1 || count % 30 == 0 {
+                                        crate::log_debug("info", &format!("[StudentAgent] Sent {} frames via WebSocket, last size={} bytes", count, frame_size));
+                                    }
+                                }
+                                Err(e) => {
+                                    crate::log_debug("error", &format!("[StudentAgent] Failed to send frame: {}", e));
+                                    break;
+                                }
+                            }
+                        }
+                        None => {
+                            crate::log_debug("info", "[StudentAgent] Frame channel closed");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        crate::log_debug("info", "[StudentAgent] Frame sender task ended");
+    });
+
+    // Message handling loop - only handles text messages now
     loop {
         tokio::select! {
             // Handle incoming messages
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(e) = handle_message_with_capture(&text, addr, &state, &mut write, &frame_tx).await {
+                        let mut writer = write.lock().await;
+                        if let Err(e) = handle_message_with_capture(&text, addr, &state, &mut *writer, &frame_tx).await {
                             log::error!("[StudentAgent] Error handling message: {}", e);
                             let error_msg = StudentMessage::Error { message: e };
-                            let _ = send_message(&mut write, &error_msg).await;
+                            let _ = send_message(&mut *writer, &error_msg).await;
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
@@ -255,7 +306,8 @@ async fn handle_connection(
                         break;
                     }
                     Some(Ok(Message::Ping(data))) => {
-                        let _ = write.send(Message::Pong(data)).await;
+                        let mut writer = write.lock().await;
+                        let _ = writer.send(Message::Pong(data)).await;
                     }
                     Some(Err(e)) => {
                         log::error!("[StudentAgent] WebSocket error: {}", e);
@@ -265,32 +317,22 @@ async fn handle_connection(
                     _ => {}
                 }
             }
-            // Handle screen frames - send as binary for efficiency
-            // Frame format: [1 byte type] [8 bytes timestamp] [4 bytes width] [4 bytes height] [H.264 data]
-            Some(frame_data) = frame_rx.recv() => {
-                let frame_size = frame_data.len();
-                // Send as binary WebSocket message (already formatted by capture loop)
-                match write.send(Message::Binary(frame_data)).await {
-                    Ok(_) => {
-                        // Log every 30th frame to avoid spam
-                        static SEND_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-                        let count = SEND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        if count == 1 || count % 30 == 0 {
-                            crate::log_debug("info", &format!("[StudentAgent] Sent {} frames via WebSocket, last size={} bytes", count, frame_size));
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("[StudentAgent] Failed to send frame: {}", e);
-                    }
-                }
-            }
             // Handle shutdown signal
             _ = shutdown_rx.recv() => {
                 log::info!("[StudentAgent] Shutdown signal received");
-                let _ = write.close().await;
                 break;
             }
         }
+    }
+    
+    // Stop the frame sender task
+    let _ = frame_stop_tx.send(());
+    let _ = frame_sender_handle.await;
+    
+    // Close WebSocket
+    {
+        let mut writer = write.lock().await;
+        let _ = writer.close().await;
     }
 
     // Stop any running screen capture
