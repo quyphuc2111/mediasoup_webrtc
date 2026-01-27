@@ -68,3 +68,13 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Upload artifacts (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            src-tauri/target/release/bundle/**/*.exe
+            src-tauri/target/release/bundle/**/*.msi
+          if-no-files-found: warn
