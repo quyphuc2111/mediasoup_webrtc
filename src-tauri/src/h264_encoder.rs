@@ -61,7 +61,7 @@ impl H264Encoder {
             width,
             height,
             frame_count: Mutex::new(0),
-            keyframe_interval_ms: 5000, // Keyframe every 5s (optimal for screen sharing with slow content changes)
+            keyframe_interval_ms: 2000, // Keyframe every 2s (helps new clients get keyframe faster)
             last_keyframe_ts: Mutex::new(0),
         })
     }
@@ -198,8 +198,11 @@ impl H264Encoder {
         let has_pps = pps.is_some();
         
         if let (Some(sps_data), Some(pps_data)) = (sps, pps) {
-            if sps_data.len() < 4 || pps_data.is_empty() {
-                crate::log_debug("warn", &format!("[H264Encoder] SPS/PPS too short: SPS={} bytes, PPS={} bytes", sps_data.len(), pps_data.len()));
+            // After fix: SPS/PPS now include NAL header byte
+            // Valid SPS: 1 byte header + at least 4 bytes data = minimum 5 bytes
+            // Valid PPS: 1 byte header + at least 1 byte data = minimum 2 bytes
+            if sps_data.len() < 5 || pps_data.len() < 2 {
+                crate::log_debug("warn", &format!("[H264Encoder] SPS/PPS too short: SPS={} bytes, PPS={} bytes (need SPS>=5, PPS>=2)", sps_data.len(), pps_data.len()));
                 return None;
             }
             
