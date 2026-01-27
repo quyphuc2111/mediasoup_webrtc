@@ -127,8 +127,9 @@ impl H264Encoder {
                         next_start += 1;
                     }
                     
-                    // Extract NAL unit (without start code and header)
-                    let nal_data = &annex_b_data[i + 5..next_start];
+                    // Extract NAL unit (INCLUDING header byte, without start code)
+                    // AVCC format requires complete NAL units with header
+                    let nal_data = &annex_b_data[i + 4..next_start];
                     
                     match nal_type {
                         7 => { // SPS
@@ -170,8 +171,9 @@ impl H264Encoder {
                         next_start += 1;
                     }
                     
-                    // Extract NAL unit (without start code and header)
-                    let nal_data = &annex_b_data[i + 4..next_start];
+                    // Extract NAL unit (INCLUDING header byte, without start code)
+                    // AVCC format requires complete NAL units with header
+                    let nal_data = &annex_b_data[i + 3..next_start];
                     
                     match nal_type {
                         7 => { // SPS
