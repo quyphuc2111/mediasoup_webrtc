@@ -62,4 +62,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 openh264 = "0.6"
 # Parallel processing for YUV conversion
 rayon = "1.8"
+# Remote control - simulate mouse/keyboard input
+enigo = "0.2"
 

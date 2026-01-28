@@ -1042,6 +1042,26 @@ fn get_student_screen_frame(
     teacher_connector::get_screen_frame(&state, &connection_id)
 }
 
+/// Send mouse input to a student (remote control)
+#[tauri::command]
+fn send_remote_mouse_event(
+    student_id: String,
+    event: teacher_connector::MouseInputEvent,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_mouse_input(&state, &student_id, event)
+}
+
+/// Send keyboard input to a student (remote control)
+#[tauri::command]
+fn send_remote_keyboard_event(
+    student_id: String,
+    event: teacher_connector::KeyboardInputEvent,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_keyboard_input(&state, &student_id, event)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1104,7 +1124,10 @@ pub fn run() {
             stop_student_screen,
             get_student_connections,
             get_student_connection,
-            get_student_screen_frame
+            get_student_screen_frame,
+            // Remote Control commands
+            send_remote_mouse_event,
+            send_remote_keyboard_event
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

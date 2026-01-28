@@ -4,7 +4,9 @@
 //! 1. Listens for incoming connections from teacher
 //! 2. Authenticates teacher using Ed25519 challenge-response
 //! 3. Captures and streams screen to teacher
+//! 4. Receives and executes remote input (mouse/keyboard)
 
+use enigo::{Enigo, Key, Keyboard, Mouse, Settings, Button, Direction, Coordinate};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -47,6 +49,47 @@ impl Default for AgentConfig {
     }
 }
 
+/// Mouse button type
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// Mouse input event from teacher
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MouseInputEvent {
+    pub event_type: String, // "move", "click", "scroll", "down", "up"
+    pub x: f64,             // Normalized 0-1
+    pub y: f64,             // Normalized 0-1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub button: Option<MouseButton>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_y: Option<f64>,
+}
+
+/// Keyboard modifiers
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct KeyModifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+}
+
+/// Keyboard input event from teacher
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct KeyboardInputEvent {
+    pub event_type: String, // "keydown", "keyup"
+    pub key: String,
+    pub code: String,
+    pub modifiers: KeyModifiers,
+}
+
 /// Messages from teacher to student
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -65,6 +108,12 @@ pub enum TeacherMessage {
 
     #[serde(rename = "ping")]
     Ping,
+
+    #[serde(rename = "mouse_input")]
+    MouseInput { event: MouseInputEvent },
+
+    #[serde(rename = "keyboard_input")]
+    KeyboardInput { event: KeyboardInputEvent },
 }
 
 /// Messages from student to teacher
@@ -510,6 +559,40 @@ where
             let response = StudentMessage::Pong;
             send_message(write, &response).await?;
         }
+
+        TeacherMessage::MouseInput { event } => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            // Handle mouse input
+            if let Err(e) = handle_mouse_input(&event) {
+                log::warn!("[StudentAgent] Failed to handle mouse input: {}", e);
+            }
+        }
+
+        TeacherMessage::KeyboardInput { event } => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            // Handle keyboard input
+            if let Err(e) = handle_keyboard_input(&event) {
+                log::warn!("[StudentAgent] Failed to handle keyboard input: {}", e);
+            }
+        }
     }
 
     Ok(())
@@ -668,6 +751,270 @@ where
         .send(Message::Text(json))
         .await
         .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Handle mouse input event from teacher
+fn handle_mouse_input(event: &MouseInputEvent) -> Result<(), String> {
+    // Get screen resolution for coordinate conversion
+    let (screen_width, screen_height) = screen_capture::get_screen_resolution()
+        .unwrap_or((1920, 1080));
+    
+    // Convert normalized coordinates to screen coordinates
+    let x = (event.x * screen_width as f64) as i32;
+    let y = (event.y * screen_height as f64) as i32;
+
+    // Create Enigo instance
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+
+    match event.event_type.as_str() {
+        "move" => {
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Failed to move mouse: {}", e))?;
+        }
+        "click" => {
+            // Move to position first
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Failed to move mouse: {}", e))?;
+            
+            // Determine button
+            let button = match event.button {
+                Some(MouseButton::Left) | None => Button::Left,
+                Some(MouseButton::Right) => Button::Right,
+                Some(MouseButton::Middle) => Button::Middle,
+            };
+            
+            // Click
+            enigo.button(button, Direction::Click)
+                .map_err(|e| format!("Failed to click: {}", e))?;
+        }
+        "down" => {
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Failed to move mouse: {}", e))?;
+            
+            let button = match event.button {
+                Some(MouseButton::Left) | None => Button::Left,
+                Some(MouseButton::Right) => Button::Right,
+                Some(MouseButton::Middle) => Button::Middle,
+            };
+            
+            enigo.button(button, Direction::Press)
+                .map_err(|e| format!("Failed to press button: {}", e))?;
+        }
+        "up" => {
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Failed to move mouse: {}", e))?;
+            
+            let button = match event.button {
+                Some(MouseButton::Left) | None => Button::Left,
+                Some(MouseButton::Right) => Button::Right,
+                Some(MouseButton::Middle) => Button::Middle,
+            };
+            
+            enigo.button(button, Direction::Release)
+                .map_err(|e| format!("Failed to release button: {}", e))?;
+        }
+        "scroll" => {
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Failed to move mouse: {}", e))?;
+            
+            if let Some(delta_y) = event.delta_y {
+                // Negative delta means scroll up, positive means scroll down
+                let scroll_amount = if delta_y > 0.0 { -1 } else { 1 };
+                enigo.scroll(scroll_amount, enigo::Axis::Vertical)
+                    .map_err(|e| format!("Failed to scroll: {}", e))?;
+            }
+            if let Some(delta_x) = event.delta_x {
+                let scroll_amount = if delta_x > 0.0 { -1 } else { 1 };
+                enigo.scroll(scroll_amount, enigo::Axis::Horizontal)
+                    .map_err(|e| format!("Failed to scroll horizontal: {}", e))?;
+            }
+        }
+        _ => {
+            log::warn!("[StudentAgent] Unknown mouse event type: {}", event.event_type);
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle keyboard input event from teacher
+fn handle_keyboard_input(event: &KeyboardInputEvent) -> Result<(), String> {
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+
+    // Convert key code to enigo Key
+    let key = code_to_key(&event.code, &event.key);
+
+    let direction = match event.event_type.as_str() {
+        "keydown" => Direction::Press,
+        "keyup" => Direction::Release,
+        _ => return Ok(()),
+    };
+
+    // Handle modifiers
+    if event.modifiers.ctrl {
+        enigo.key(Key::Control, Direction::Press)
+            .map_err(|e| format!("Failed to press Ctrl: {}", e))?;
+    }
+    if event.modifiers.alt {
+        enigo.key(Key::Alt, Direction::Press)
+            .map_err(|e| format!("Failed to press Alt: {}", e))?;
+    }
+    if event.modifiers.shift {
+        enigo.key(Key::Shift, Direction::Press)
+            .map_err(|e| format!("Failed to press Shift: {}", e))?;
+    }
+    if event.modifiers.meta {
+        enigo.key(Key::Meta, Direction::Press)
+            .map_err(|e| format!("Failed to press Meta: {}", e))?;
+    }
+
+    // Press/release the key
+    enigo.key(key, direction)
+        .map_err(|e| format!("Failed to handle key: {}", e))?;
+
+    // Release modifiers on keyup
+    if event.event_type == "keyup" {
+        if event.modifiers.meta {
+            let _ = enigo.key(Key::Meta, Direction::Release);
+        }
+        if event.modifiers.shift {
+            let _ = enigo.key(Key::Shift, Direction::Release);
+        }
+        if event.modifiers.alt {
+            let _ = enigo.key(Key::Alt, Direction::Release);
+        }
+        if event.modifiers.ctrl {
+            let _ = enigo.key(Key::Control, Direction::Release);
+        }
+    }
+
+    Ok(())
+}
+
+/// Convert JavaScript key code to enigo Key
+fn code_to_key(code: &str, key: &str) -> Key {
+    match code {
+        // Letters
+        "KeyA" => Key::Unicode('a'),
+        "KeyB" => Key::Unicode('b'),
+        "KeyC" => Key::Unicode('c'),
+        "KeyD" => Key::Unicode('d'),
+        "KeyE" => Key::Unicode('e'),
+        "KeyF" => Key::Unicode('f'),
+        "KeyG" => Key::Unicode('g'),
+        "KeyH" => Key::Unicode('h'),
+        "KeyI" => Key::Unicode('i'),
+        "KeyJ" => Key::Unicode('j'),
+        "KeyK" => Key::Unicode('k'),
+        "KeyL" => Key::Unicode('l'),
+        "KeyM" => Key::Unicode('m'),
+        "KeyN" => Key::Unicode('n'),
+        "KeyO" => Key::Unicode('o'),
+        "KeyP" => Key::Unicode('p'),
+        "KeyQ" => Key::Unicode('q'),
+        "KeyR" => Key::Unicode('r'),
+        "KeyS" => Key::Unicode('s'),
+        "KeyT" => Key::Unicode('t'),
+        "KeyU" => Key::Unicode('u'),
+        "KeyV" => Key::Unicode('v'),
+        "KeyW" => Key::Unicode('w'),
+        "KeyX" => Key::Unicode('x'),
+        "KeyY" => Key::Unicode('y'),
+        "KeyZ" => Key::Unicode('z'),
+        
+        // Numbers
+        "Digit0" => Key::Unicode('0'),
+        "Digit1" => Key::Unicode('1'),
+        "Digit2" => Key::Unicode('2'),
+        "Digit3" => Key::Unicode('3'),
+        "Digit4" => Key::Unicode('4'),
+        "Digit5" => Key::Unicode('5'),
+        "Digit6" => Key::Unicode('6'),
+        "Digit7" => Key::Unicode('7'),
+        "Digit8" => Key::Unicode('8'),
+        "Digit9" => Key::Unicode('9'),
+        
+        // Function keys
+        "F1" => Key::F1,
+        "F2" => Key::F2,
+        "F3" => Key::F3,
+        "F4" => Key::F4,
+        "F5" => Key::F5,
+        "F6" => Key::F6,
+        "F7" => Key::F7,
+        "F8" => Key::F8,
+        "F9" => Key::F9,
+        "F10" => Key::F10,
+        "F11" => Key::F11,
+        "F12" => Key::F12,
+        
+        // Special keys
+        "Enter" => Key::Return,
+        "Escape" => Key::Escape,
+        "Backspace" => Key::Backspace,
+        "Tab" => Key::Tab,
+        "Space" => Key::Space,
+        "Delete" => Key::Delete,
+        "Home" => Key::Home,
+        "End" => Key::End,
+        "PageUp" => Key::PageUp,
+        "PageDown" => Key::PageDown,
+        
+        // Arrow keys
+        "ArrowUp" => Key::UpArrow,
+        "ArrowDown" => Key::DownArrow,
+        "ArrowLeft" => Key::LeftArrow,
+        "ArrowRight" => Key::RightArrow,
+        
+        // Modifiers (handled separately but included for completeness)
+        "ShiftLeft" | "ShiftRight" => Key::Shift,
+        "ControlLeft" | "ControlRight" => Key::Control,
+        "AltLeft" | "AltRight" => Key::Alt,
+        "MetaLeft" | "MetaRight" => Key::Meta,
+        
+        // Punctuation and symbols
+        "Minus" => Key::Unicode('-'),
+        "Equal" => Key::Unicode('='),
+        "BracketLeft" => Key::Unicode('['),
+        "BracketRight" => Key::Unicode(']'),
+        "Backslash" => Key::Unicode('\\'),
+        "Semicolon" => Key::Unicode(';'),
+        "Quote" => Key::Unicode('\''),
+        "Backquote" => Key::Unicode('`'),
+        "Comma" => Key::Unicode(','),
+        "Period" => Key::Unicode('.'),
+        "Slash" => Key::Unicode('/'),
+        
+        // Numpad
+        "Numpad0" => Key::Unicode('0'),
+        "Numpad1" => Key::Unicode('1'),
+        "Numpad2" => Key::Unicode('2'),
+        "Numpad3" => Key::Unicode('3'),
+        "Numpad4" => Key::Unicode('4'),
+        "Numpad5" => Key::Unicode('5'),
+        "Numpad6" => Key::Unicode('6'),
+        "Numpad7" => Key::Unicode('7'),
+        "Numpad8" => Key::Unicode('8'),
+        "Numpad9" => Key::Unicode('9'),
+        "NumpadMultiply" => Key::Unicode('*'),
+        "NumpadAdd" => Key::Unicode('+'),
+        "NumpadSubtract" => Key::Unicode('-'),
+        "NumpadDecimal" => Key::Unicode('.'),
+        "NumpadDivide" => Key::Unicode('/'),
+        "NumpadEnter" => Key::Return,
+        
+        // Default: try to use the key character
+        _ => {
+            if key.len() == 1 {
+                Key::Unicode(key.chars().next().unwrap())
+            } else {
+                log::warn!("[StudentAgent] Unknown key code: {} (key: {})", code, key);
+                Key::Unicode(' ')
+            }
+        }
+    }
 }
 
 /// Start the student agent server

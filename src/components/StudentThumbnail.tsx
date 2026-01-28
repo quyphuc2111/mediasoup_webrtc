@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { H264VideoPlayer } from './H264VideoPlayer';
+import { ContextMenu, ContextMenuItem } from './ContextMenu';
 
 type ConnectionStatus =
   | 'Disconnected'
@@ -35,6 +36,7 @@ interface StudentThumbnailProps {
   onClick: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
+  onRemoteControl?: () => void;  // Callback để mở chế độ điều khiển từ xa
 }
 
 export function StudentThumbnail({
@@ -44,12 +46,16 @@ export function StudentThumbnail({
   onClick,
   onConnect,
   onDisconnect,
+  onRemoteControl,
 }: StudentThumbnailProps) {
   const isConnected = student.status === 'Connected' || student.status === 'Viewing';
   const isConnecting = student.status === 'Connecting' || student.status === 'Authenticating';
   const hasError = typeof student.status === 'object' && 'Error' in student.status;
   const isDisconnected = student.status === 'Disconnected';
   const isViewing = student.status === 'Viewing';
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   const statusClass = useMemo(() => {
     if (student.status === 'Viewing') return 'viewing';
@@ -61,13 +67,91 @@ export function StudentThumbnail({
 
   const displayName = student.name || `Student ${student.ip.split('.').pop()}`;
 
+  // Handle right-click to show context menu
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  // Close context menu
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  // Handle context menu item selection
+  const handleContextMenuSelect = useCallback((id: string) => {
+    switch (id) {
+      case 'view':
+        if (isConnected) onClick();
+        break;
+      case 'remote-control':
+        if (onRemoteControl && isViewing) onRemoteControl();
+        break;
+      case 'connect':
+        onConnect();
+        break;
+      case 'disconnect':
+        onDisconnect();
+        break;
+      default:
+        break;
+    }
+  }, [isConnected, isViewing, onClick, onConnect, onDisconnect, onRemoteControl]);
+
+  // Build context menu items based on connection status
+  const contextMenuItems: ContextMenuItem[] = useMemo(() => {
+    const items: ContextMenuItem[] = [];
+
+    if (isConnected) {
+      items.push({
+        id: 'view',
+        label: 'Xem màn hình',
+        icon: '👁️',
+      });
+    }
+
+    if (isViewing && onRemoteControl) {
+      items.push({
+        id: 'remote-control',
+        label: 'Điều khiển từ xa',
+        icon: '🖱️',
+      });
+    }
+
+    if (items.length > 0 && (isDisconnected || hasError || isConnected)) {
+      items.push({ id: 'sep1', label: '', separator: true });
+    }
+
+    if (isDisconnected || hasError) {
+      items.push({
+        id: 'connect',
+        label: 'Kết nối',
+        icon: '🔗',
+      });
+    }
+
+    if (isConnected) {
+      items.push({
+        id: 'disconnect',
+        label: 'Ngắt kết nối',
+        icon: '🔌',
+        danger: true,
+      });
+    }
+
+    return items;
+  }, [isConnected, isViewing, isDisconnected, hasError, onRemoteControl]);
+
   return (
-    <div 
-      className={`student-thumbnail ${statusClass}`}
-      onClick={isConnected ? onClick : undefined}
-    >
-      {/* Screen Preview Area */}
-      <div className="thumbnail-screen">
+    <>
+      <div 
+        className={`student-thumbnail ${statusClass}`}
+        onClick={isConnected ? onClick : undefined}
+        onContextMenu={handleContextMenu}
+      >
+        {/* Screen Preview Area */}
+        <div className="thumbnail-screen">
         {isViewing && screenFrame ? (
           <div className="screen-preview">
             <H264VideoPlayer 
@@ -125,6 +209,18 @@ export function StudentThumbnail({
         ) : null}
       </div>
     </div>
+
+      {/* Context Menu */}
+      {contextMenu && contextMenuItems.length > 0 && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onSelect={handleContextMenuSelect}
+          onClose={handleCloseContextMenu}
+        />
+      )}
+    </>
   );
 }
 

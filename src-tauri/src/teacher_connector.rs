@@ -73,6 +73,47 @@ pub enum StudentMessage {
     Error { message: String },
 }
 
+/// Mouse button type
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// Mouse input event from teacher
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct MouseInputEvent {
+    pub event_type: String, // "move", "click", "scroll", "down", "up"
+    pub x: f64,             // Normalized 0-1
+    pub y: f64,             // Normalized 0-1
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub button: Option<MouseButton>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta_y: Option<f64>,
+}
+
+/// Keyboard modifiers
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct KeyModifiers {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+}
+
+/// Keyboard input event from teacher
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct KeyboardInputEvent {
+    pub event_type: String, // "keydown", "keyup"
+    pub key: String,
+    pub code: String,
+    pub modifiers: KeyModifiers,
+}
+
 /// Messages from teacher to student
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -91,6 +132,12 @@ pub enum TeacherMessage {
 
     #[serde(rename = "ping")]
     Ping,
+
+    #[serde(rename = "mouse_input")]
+    MouseInput { event: MouseInputEvent },
+
+    #[serde(rename = "keyboard_input")]
+    KeyboardInput { event: KeyboardInputEvent },
 }
 
 /// Command to send to a connection handler
@@ -99,6 +146,8 @@ pub enum ConnectionCommand {
     RequestScreen,
     StopScreen,
     Disconnect,
+    SendMouseInput(MouseInputEvent),
+    SendKeyboardInput(KeyboardInputEvent),
 }
 
 /// Screen frame data
@@ -551,6 +600,16 @@ async fn handle_connection(
                         let _ = write.send(Message::Text(json)).await;
                         state.update_status(&id, ConnectionStatus::Connected);
                     }
+                    Some(ConnectionCommand::SendMouseInput(event)) => {
+                        let msg = TeacherMessage::MouseInput { event };
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
+                    Some(ConnectionCommand::SendKeyboardInput(event)) => {
+                        let msg = TeacherMessage::KeyboardInput { event };
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
                     Some(ConnectionCommand::Disconnect) | None => {
                         log::info!("[TeacherConnector] Disconnect command received");
                         let _ = write.close().await;
@@ -685,6 +744,36 @@ pub fn stop_screen(state: &ConnectorState, id: &str) -> Result<(), String> {
         sender
             .try_send(ConnectionCommand::StopScreen)
             .map_err(|e| format!("Failed to send command: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Send mouse input to student
+pub fn send_mouse_input(state: &ConnectorState, id: &str, event: MouseInputEvent) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendMouseInput(event))
+            .map_err(|e| format!("Failed to send mouse input: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Send keyboard input to student
+pub fn send_keyboard_input(state: &ConnectorState, id: &str, event: KeyboardInputEvent) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendKeyboardInput(event))
+            .map_err(|e| format!("Failed to send keyboard input: {}", e))?;
     } else {
         return Err("Connection not found".to_string());
     }

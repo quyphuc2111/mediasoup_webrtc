@@ -54,6 +54,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
   const [newStudentIp, setNewStudentIp] = useState('');
   const [newStudentPort, setNewStudentPort] = useState(3017);
   const [selectedStudent, setSelectedStudent] = useState<string | null>(null);
+  const [remoteControlEnabled, setRemoteControlEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [dbInitialized, setDbInitialized] = useState(false);
@@ -289,8 +290,13 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
         <StudentFullView
           student={student}
           screenFrame={screenFrames[student.id]}
-          onClose={() => setSelectedStudent(null)}
+          onClose={() => {
+            setSelectedStudent(null);
+            setRemoteControlEnabled(false);
+          }}
           onStopScreen={() => stopScreen(student.id)}
+          remoteControlEnabled={remoteControlEnabled}
+          onToggleRemoteControl={() => setRemoteControlEnabled(!remoteControlEnabled)}
         />
       );
     }
@@ -449,6 +455,14 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
                 }}
                 onConnect={() => connectToStudent(conn.ip, conn.port, conn.name || undefined)}
                 onDisconnect={() => disconnectStudent(conn.id)}
+                onRemoteControl={() => {
+                  // Mở chế độ điều khiển từ xa
+                  setSelectedStudent(conn.id);
+                  setRemoteControlEnabled(true);
+                  if (conn.status === 'Connected') {
+                    requestScreen(conn.id);
+                  }
+                }}
               />
             ))}
             
