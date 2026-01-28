@@ -265,49 +265,13 @@ export function StudentFullView({
     }
   }, [getNormalizedPosition, sendMouseEvent]);
 
-  const handleClick = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const pos = getNormalizedPosition(e);
-    if (pos) {
-      // Clear any pending mouse move to ensure click position is accurate
-      if (mouseMoveTimeoutRef.current !== null) {
-        clearTimeout(mouseMoveTimeoutRef.current);
-        mouseMoveTimeoutRef.current = null;
-      }
-      pendingMouseMoveRef.current = null;
-
-      const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
-      sendMouseEvent({
-        event_type: 'click',
-        x: pos.x,
-        y: pos.y,
-        button,
-      });
-    }
-  }, [getNormalizedPosition, sendMouseEvent]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (isRemoteControlActive) {
       e.preventDefault();
-      // Send right click
-      const pos = getNormalizedPosition(e);
-      if (pos) {
-        // Clear any pending mouse move to ensure click position is accurate
-        if (mouseMoveTimeoutRef.current !== null) {
-          clearTimeout(mouseMoveTimeoutRef.current);
-          mouseMoveTimeoutRef.current = null;
-        }
-        pendingMouseMoveRef.current = null;
-
-        sendMouseEvent({
-          event_type: 'click',
-          x: pos.x,
-          y: pos.y,
-          button: 'right',
-        });
-      }
+      // Do not send explicit click, rely on mousedown/up
     }
-  }, [isRemoteControlActive, getNormalizedPosition, sendMouseEvent]);
+  }, [isRemoteControlActive]);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!isRemoteControlActive) return;
@@ -425,7 +389,6 @@ export function StudentFullView({
             onMouseMove={isRemoteControlActive ? handleMouseMove : undefined}
             onMouseDown={isRemoteControlActive ? handleMouseDown : undefined}
             onMouseUp={isRemoteControlActive ? handleMouseUp : undefined}
-            onClick={isRemoteControlActive ? handleClick : undefined}
             onContextMenu={handleContextMenu}
             onWheel={isRemoteControlActive ? handleWheel : undefined}
           >

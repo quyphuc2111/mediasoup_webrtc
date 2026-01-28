@@ -876,31 +876,41 @@ fn handle_mouse_input(event: &MouseInputEvent) -> Result<(), String> {
                 .map_err(|e| format!("Failed to click: {}", e))?;
         }
         "down" => {
-            enigo
-                .move_mouse(x, y, Coordinate::Abs)
-                .map_err(|e| format!("Failed to move mouse: {}", e))?;
-
             let button = match event.button {
                 Some(MouseButton::Left) | None => Button::Left,
                 Some(MouseButton::Right) => Button::Right,
                 Some(MouseButton::Middle) => Button::Middle,
             };
 
+            // Only move if we aren't already there (optimization)?
+            // For safety, let's just press. The preceding 'move' event should have positioned us.
+            // But if packets are lost (UDP) or reordered? TCP/WS guarantees order.
+            // Sending explicit move with down ensures accuracy.
+            enigo
+                .move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Failed to move mouse (pre-down): {}", e))?;
+
+            crate::log_debug(
+                "info",
+                &format!("[Mouse] MouseDown {:?} at {},{}", button, x, y),
+            );
             enigo
                 .button(button, Direction::Press)
                 .map_err(|e| format!("Failed to press button: {}", e))?;
         }
         "up" => {
-            enigo
-                .move_mouse(x, y, Coordinate::Abs)
-                .map_err(|e| format!("Failed to move mouse: {}", e))?;
-
             let button = match event.button {
                 Some(MouseButton::Left) | None => Button::Left,
                 Some(MouseButton::Right) => Button::Right,
                 Some(MouseButton::Middle) => Button::Middle,
             };
 
+            // enigo.move_mouse(x, y, Coordinate::Abs)?; // Optional?
+
+            crate::log_debug(
+                "info",
+                &format!("[Mouse] MouseUp {:?} at {},{}", button, x, y),
+            );
             enigo
                 .button(button, Direction::Release)
                 .map_err(|e| format!("Failed to release button: {}", e))?;
@@ -1071,30 +1081,6 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "NumpadDecimal" => Key::Unicode('.'),
         "NumpadDivide" => Key::Unicode('/'),
         "NumpadEnter" => Key::Return,
-
-        // Special Keys
-        "Space" => Key::Space,
-        "Backspace" => Key::Backspace,
-        "Tab" => Key::Tab,
-        "Enter" => Key::Return,
-        "Escape" => Key::Escape,
-        "ShiftLeft" | "ShiftRight" => Key::Shift,
-        "ControlLeft" | "ControlRight" => Key::Control,
-        "AltLeft" | "AltRight" => Key::Alt,
-        "MetaLeft" | "MetaRight" => Key::Meta,
-        "CapsLock" => Key::CapsLock,
-
-        // Navigation
-        "ArrowUp" => Key::UpArrow,
-        "ArrowDown" => Key::DownArrow,
-        "ArrowLeft" => Key::LeftArrow,
-        "ArrowRight" => Key::RightArrow,
-        "Home" => Key::Home,
-        "End" => Key::End,
-        "PageUp" => Key::PageUp,
-        "PageDown" => Key::PageDown,
-        "Insert" => Key::Unicode('d'), // Fallback or ignore
-        "Delete" => Key::Delete,
 
         // Default: try to use the key character
         _ => {

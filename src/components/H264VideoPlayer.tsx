@@ -151,8 +151,6 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
 
       const config: VideoDecoderConfig = {
         codec: codecStr,
-        codedWidth: width,
-        codedHeight: height,
         optimizeForLatency: true,
         hardwareAcceleration: 'prefer-hardware',
       };
@@ -169,12 +167,26 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       }
       */
 
-      decoder.configure(config);
+      try {
+        decoder.configure(config);
+      } catch (e: any) {
+        console.warn(`[H264Player] Initial configure failed (${e.message}), trying software fallback...`);
+        // Fallback to software if hardware fails (common on Windows with odd resolutions)
+        config.hardwareAcceleration = 'prefer-software';
+        try {
+          decoder.configure(config);
+          console.log('[H264Player] Fallback to software decoding successful');
+        } catch (e2: any) {
+          console.error('[H264Player] Software fallback also failed:', e2);
+          throw e2;
+        }
+      }
+
       setIsInitialized(true);
       setError(null);
       errorCountRef.current = 0;
       decoderRef.current = decoder;
-      console.log(`[H264Player] Decoder initialized for ${width}x${height}`, description ? 'with description' : '');
+      console.log(`[H264Player] Decoder initialized for ${width}x${height} without description (Annex B mode)`);
       return true;
     } catch (e: any) {
       console.error('[H264Player] Failed to init decoder:', e);

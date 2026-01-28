@@ -931,3 +931,75 @@ mod tests {
         assert!(json.contains("auth_response"));
     }
 }
+
+// --- Binary Protocol Helpers ---
+
+fn create_mouse_packet(event: &MouseInputEvent) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(19);
+    buf.push(1); // Type=Mouse
+
+    let type_byte = match event.event_type.as_str() {
+        "move" => 0,
+        "click" => 1,
+        "down" => 2,
+        "up" => 3,
+        "scroll" => 4,
+        _ => 0,
+    };
+    buf.push(type_byte);
+
+    let btn_byte = match event.button {
+        Some(MouseButton::Left) => 0,
+        Some(MouseButton::Right) => 1,
+        Some(MouseButton::Middle) => 2,
+        _ => 0,
+    };
+    buf.push(btn_byte);
+
+    buf.extend_from_slice(&(event.x as f32).to_le_bytes());
+    buf.extend_from_slice(&(event.y as f32).to_le_bytes());
+
+    let dx = event.delta_x.unwrap_or(0.0) as f32;
+    let dy = event.delta_y.unwrap_or(0.0) as f32;
+    buf.extend_from_slice(&dx.to_le_bytes());
+    buf.extend_from_slice(&dy.to_le_bytes());
+
+    buf
+}
+
+fn create_keyboard_packet(event: &KeyboardInputEvent) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(64);
+    buf.push(2); // Type=Keyboard
+
+    let type_byte = match event.event_type.as_str() {
+        "keydown" => 0,
+        "keyup" => 1,
+        _ => 0,
+    };
+    buf.push(type_byte);
+
+    let mut mods = 0u8;
+    if event.modifiers.ctrl {
+        mods |= 1;
+    }
+    if event.modifiers.alt {
+        mods |= 2;
+    }
+    if event.modifiers.shift {
+        mods |= 4;
+    }
+    if event.modifiers.meta {
+        mods |= 8;
+    }
+    buf.push(mods);
+
+    let code_bytes = event.code.as_bytes();
+    buf.push(code_bytes.len() as u8);
+    buf.extend_from_slice(code_bytes);
+
+    let key_bytes = event.key.as_bytes();
+    buf.push(key_bytes.len() as u8);
+    buf.extend_from_slice(key_bytes);
+
+    buf
+}
