@@ -139,9 +139,14 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
         hardwareAcceleration: 'prefer-hardware',
       };
 
+      // NOTE: We do NOT pass description to configure() because our stream is Annex B (start codes).
+      // If we pass description (AVCC), WebCodecs expects length-prefixed NALUs.
+      // We only use description to extract the correct codec string.
+      /* 
       if (description) {
-        config.description = description;
+        config.description = description; 
       }
+      */
 
       decoder.configure(config);
       setIsInitialized(true);
