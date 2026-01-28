@@ -55,10 +55,12 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [useFallback, setUseFallback] = useState(false);
+  const [forceSoftware, setForceSoftware] = useState(false);
   const lastKeyframeRef = useRef<Uint8Array | null>(null);
   const pendingFramesRef = useRef<ScreenFrame[]>([]);
   const errorCountRef = useRef(0);
   const lastProcessedTimestampRef = useRef<number>(-1);
+  const isInitializingRef = useRef(false);
 
   // Stats refs
   const frameCountRef = useRef(0);
@@ -68,11 +70,14 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
   const currentResolutionRef = useRef({ width: 0, height: 0 });
 
   // Initialize decoder
-  const initDecoder = useCallback((width: number, height: number, description?: Uint8Array) => {
+  const initDecoder = useCallback(async (width: number, height: number, description?: Uint8Array) => {
     if (!isWebCodecsSupported()) {
       setError('WebCodecs không được hỗ trợ trong browser này');
       return false;
     }
+
+    if (isInitializingRef.current) return false;
+    isInitializingRef.current = true;
 
     try {
       // Close existing decoder
@@ -80,32 +85,61 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
         decoderRef.current.close();
       }
 
+      // Prepare config
+      let codecStr = 'avc1.42E01f'; // Default Baseline
+      if (description && description.length >= 4) {
+        const profile = description[1].toString(16).padStart(2, '0').toUpperCase();
+        const compat = description[2].toString(16).padStart(2, '0').toUpperCase();
+        const level = description[3].toString(16).padStart(2, '0').toUpperCase();
+        codecStr = `avc1.${profile}${compat}${level}`;
+        currentCodecRef.current = codecStr;
+      }
+
+      const config: VideoDecoderConfig = {
+        codec: codecStr,
+        optimizeForLatency: true,
+        hardwareAcceleration: forceSoftware ? 'prefer-software' : 'prefer-hardware',
+      };
+
+      // Check support proactively
+      try {
+        const support = await VideoDecoder.isConfigSupported(config);
+        if (!support.supported) {
+          console.warn(`[H264Player] Hardware config not supported (${config.codec}), switching to software.`);
+          config.hardwareAcceleration = 'prefer-software';
+          // If we switched to software, verify support again
+          const supportSoft = await VideoDecoder.isConfigSupported(config);
+          if (!supportSoft.supported) {
+            // Try disabling optimization
+            config.optimizeForLatency = false;
+            console.warn(`[H264Player] Software config not supported, disabling low-latency.`);
+          }
+          // Persist fallback
+          setForceSoftware(true);
+        }
+      } catch (checkErr) {
+        console.warn("[H264Player] isConfigSupported check failed:", checkErr);
+      }
+
+      // Create Decoder
       const decoder = new VideoDecoder({
         output: (videoFrame) => {
-          // Use requestAnimationFrame for smooth rendering
           requestAnimationFrame(() => {
-            // Draw frame to canvas
             const canvas = canvasRef.current;
             if (canvas) {
               const ctx = canvas.getContext('2d', {
-                alpha: false,  // Disable alpha for better performance
-                desynchronized: true,  // Allow async rendering
+                alpha: false,
+                desynchronized: true,
               });
               if (ctx) {
-                // Resize canvas if needed
                 if (canvas.width !== videoFrame.displayWidth ||
                   canvas.height !== videoFrame.displayHeight) {
                   canvas.width = videoFrame.displayWidth;
                   canvas.height = videoFrame.displayHeight;
                 }
-
-                // Clear canvas before drawing new frame
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                // Draw frame
                 ctx.drawImage(videoFrame, 0, 0);
-                // setDecodedFrameCount(prev => prev + 1); // Replaced by frameCountRef for stats
-                errorCountRef.current = 0; // Reset error count on success
+                errorCountRef.current = 0;
               }
             }
             videoFrame.close();
@@ -115,12 +149,18 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
           errorCountRef.current++;
           console.error(`[H264Player] Decoder error (${errorCountRef.current}):`, e);
 
-          // Request a new keyframe from the student if we get errors
+          // Check for Unsupported Configuration error (common on Windows)
+          if (e.message && (e.message.includes('Unsupported configuration') || e.message.includes('Config not supported') || e.message.includes('configuration')) && !forceSoftware) {
+            console.warn('[H264Player] Unsupported configuration detected (async error). Switching to persistent software decoding.');
+            setForceSoftware(true);
+            errorCountRef.current = 0;
+            return;
+          }
+
           if (connectionId) {
             invoke('send_remote_keyframe_request', { connectionId }).catch(console.error);
           }
 
-          // After 5 consecutive errors, fallback to JPEG
           if (errorCountRef.current >= 5) {
             console.warn('[H264Player] Too many errors, falling back to JPEG');
             setUseFallback(true);
@@ -128,7 +168,6 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
             return;
           }
 
-          // Don't set error state immediately - might be recoverable
           if (e.message && e.message.includes('decode')) {
             console.warn('[H264Player] Decode error, will retry with next keyframe');
           } else {
@@ -137,63 +176,34 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
         },
       });
 
-      // Build codec string from description if available
-      let codecStr = 'avc1.42E01f'; // Default Baseline
-      if (description && description.length >= 4) {
-        // avc1.PPCCLL where PP=profile, CC=compat, LL=level (in hex)
-        const profile = description[1].toString(16).padStart(2, '0').toUpperCase();
-        const compat = description[2].toString(16).padStart(2, '0').toUpperCase();
-        const level = description[3].toString(16).padStart(2, '0').toUpperCase();
-        codecStr = `avc1.${profile}${compat}${level}`;
-        console.log(`[H264Player] Detected codec from SPS: ${codecStr}`);
-        currentCodecRef.current = codecStr;
-      }
-
-      const config: VideoDecoderConfig = {
-        codec: codecStr,
-        optimizeForLatency: true,
-        hardwareAcceleration: 'prefer-hardware',
-      };
-
       // Update current resolution for stats
       currentResolutionRef.current = { width, height };
 
-      // NOTE: We do NOT pass description to configure() because our stream is Annex B (start codes).
-      // If we pass description (AVCC), WebCodecs expects length-prefixed NALUs.
-      // We only use description to extract the correct codec string.
-      /* 
-      if (description) {
-        config.description = description; 
-      }
-      */
-
+      // NOTE: strict configure
       try {
         decoder.configure(config);
       } catch (e: any) {
-        console.warn(`[H264Player] Initial configure failed (${e.message}), trying software fallback...`);
-        // Fallback to software if hardware fails (common on Windows with odd resolutions)
+        // Safe fallback if configure throws synchronously
+        console.warn(`[H264Player] Sync configure failed (${e.message}), force software.`);
         config.hardwareAcceleration = 'prefer-software';
-        try {
-          decoder.configure(config);
-          console.log('[H264Player] Fallback to software decoding successful');
-        } catch (e2: any) {
-          console.error('[H264Player] Software fallback also failed:', e2);
-          throw e2;
-        }
+        setForceSoftware(true);
+        decoder.configure(config);
       }
 
       setIsInitialized(true);
       setError(null);
       errorCountRef.current = 0;
       decoderRef.current = decoder;
-      console.log(`[H264Player] Decoder initialized for ${width}x${height} without description (Annex B mode)`);
+      console.log(`[H264Player] Decoder initialized for ${width}x${height} ${config.hardwareAcceleration === 'prefer-software' ? '[SOFTWARE]' : '[HARDWARE]'}`);
       return true;
     } catch (e: any) {
       console.error('[H264Player] Failed to init decoder:', e);
       setError(`Init failed: ${e?.message || e}`);
       return false;
+    } finally {
+      isInitializingRef.current = false;
     }
-  }, [connectionId]);
+  }, [connectionId, forceSoftware]);
 
   // Decode a frame
   const decodeFrame = useCallback((frameData: ScreenFrame) => {
@@ -234,12 +244,14 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       if (frameData.is_keyframe && frameData.sps_pps) {
         console.log('[H264Player] Initializing decoder with keyframe and SPS/PPS');
         const description = arrayToUint8Array(frameData.sps_pps);
-        if (initDecoder(frameData.width, frameData.height, description)) {
-          // Retry decode after init
-          decodeFrame(frameData);
-        } else {
-          console.error('[H264Player] Failed to initialize decoder');
-        }
+
+        // Wait for async init
+        initDecoder(frameData.width, frameData.height, description).then((success) => {
+          if (success) {
+            // Retry decode after init
+            decodeFrame(frameData);
+          }
+        });
       } else {
         if (frameData.is_keyframe && !frameData.sps_pps) {
           console.warn('[H264Player] Keyframe received but no SPS/PPS description');
@@ -319,21 +331,23 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
         console.log('[H264Player] Attempting decoder reset with stored keyframe');
         setIsInitialized(false);
         const description = arrayToUint8Array(frameData.sps_pps);
-        if (initDecoder(frameData.width, frameData.height, description)) {
-          // Retry with the keyframe
-          try {
-            const chunk = new EncodedVideoChunk({
-              type: 'key',
-              timestamp: frameData.timestamp * 1000,
-              duration: undefined,
-              data: lastKeyframeRef.current,
-            });
-            decoderRef.current?.decode(chunk);
-            lastProcessedTimestampRef.current = frameData.timestamp;
-          } catch (retryError) {
-            console.error('[H264Player] Retry decode also failed:', retryError);
+        initDecoder(frameData.width, frameData.height, description).then((success) => {
+          if (success) {
+            // Retry with the keyframe
+            try {
+              const chunk = new EncodedVideoChunk({
+                type: 'key',
+                timestamp: frameData.timestamp * 1000,
+                duration: undefined,
+                data: lastKeyframeRef.current!, // safe because of check above
+              });
+              decoderRef.current?.decode(chunk);
+              lastProcessedTimestampRef.current = frameData.timestamp;
+            } catch (retryError) {
+              console.error('[H264Player] Retry decode also failed:', retryError);
+            }
           }
-        }
+        });
       }
     }
   }, [initDecoder]);
@@ -349,12 +363,14 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
     if (!isInitialized || decoderRef.current?.state === 'closed') {
       if (frame.is_keyframe && frame.sps_pps) {
         const description = arrayToUint8Array(frame.sps_pps);
-        if (initDecoder(frame.width, frame.height, description)) {
-          // Clear pending frames - they're stale without this keyframe
-          pendingFramesRef.current = [];
-          // Decode the keyframe first
-          decodeFrame(frame);
-        }
+        initDecoder(frame.width, frame.height, description).then((success) => {
+          if (success) {
+            // Clear pending frames - they're stale without this keyframe
+            pendingFramesRef.current = [];
+            // Decode the keyframe first
+            decodeFrame(frame);
+          }
+        });
       } else {
         // Need keyframe with description first
         pendingFramesRef.current.push(frame);
