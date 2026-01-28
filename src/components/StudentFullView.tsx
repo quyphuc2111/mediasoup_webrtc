@@ -60,22 +60,22 @@ interface StudentFullViewProps {
   onToggleRemoteControl?: () => void;
 }
 
-export function StudentFullView({ 
-  student, 
-  screenFrame, 
-  onClose, 
+export function StudentFullView({
+  student,
+  screenFrame,
+  onClose,
   onStopScreen,
   remoteControlEnabled = false,
   onToggleRemoteControl,
 }: StudentFullViewProps) {
   const displayName = student.name || `Student ${student.ip.split('.').pop()}`;
   const isViewing = student.status === 'Viewing';
-  
+
   // Remote control state
   const [isRemoteControlActive, setIsRemoteControlActive] = useState(remoteControlEnabled);
   const screenContainerRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
-  
+
   // Throttling for mouse move events to reduce network traffic and improve responsiveness
   const lastMouseMoveTimeRef = useRef<number>(0);
   const pendingMouseMoveRef = useRef<{ x: number; y: number } | null>(null);
@@ -86,7 +86,7 @@ export function StudentFullView({
   useEffect(() => {
     setIsRemoteControlActive(remoteControlEnabled);
   }, [remoteControlEnabled]);
-  
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -109,13 +109,13 @@ export function StudentFullView({
     if (!container || !screenFrame) return null;
 
     const rect = container.getBoundingClientRect();
-    
+
     // Calculate the actual image position within the container
     const containerAspect = rect.width / rect.height;
     const imageAspect = screenFrame.width / screenFrame.height;
-    
+
     let imageWidth: number, imageHeight: number, offsetX: number, offsetY: number;
-    
+
     if (containerAspect > imageAspect) {
       // Container is wider - image is constrained by height
       imageHeight = rect.height;
@@ -147,7 +147,7 @@ export function StudentFullView({
   // Send mouse event to student
   const sendMouseEvent = useCallback(async (event: MouseInputEvent) => {
     if (!isRemoteControlActive) return;
-    
+
     try {
       await invoke('send_remote_mouse_event', {
         studentId: student.id,
@@ -161,7 +161,7 @@ export function StudentFullView({
   // Send keyboard event to student
   const sendKeyboardEvent = useCallback(async (event: KeyboardInputEvent) => {
     if (!isRemoteControlActive) return;
-    
+
     try {
       await invoke('send_remote_keyboard_event', {
         studentId: student.id,
@@ -176,24 +176,24 @@ export function StudentFullView({
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = getNormalizedPosition(e);
     if (!pos) return;
-    
+
     const now = Date.now();
     const timeSinceLastMove = now - lastMouseMoveTimeRef.current;
-    
+
     // Store the latest position
     pendingMouseMoveRef.current = pos;
-    
+
     // If enough time has passed, send immediately
     if (timeSinceLastMove >= MOUSE_MOVE_THROTTLE_MS) {
       lastMouseMoveTimeRef.current = now;
       pendingMouseMoveRef.current = null;
-      
+
       // Clear any pending timeout
       if (mouseMoveTimeoutRef.current !== null) {
         clearTimeout(mouseMoveTimeoutRef.current);
         mouseMoveTimeoutRef.current = null;
       }
-      
+
       sendMouseEvent({
         event_type: 'move',
         x: pos.x,
@@ -209,7 +209,7 @@ export function StudentFullView({
             lastMouseMoveTimeRef.current = Date.now();
             pendingMouseMoveRef.current = null;
             mouseMoveTimeoutRef.current = null;
-            
+
             sendMouseEvent({
               event_type: 'move',
               x: pending.x,
@@ -231,7 +231,7 @@ export function StudentFullView({
         mouseMoveTimeoutRef.current = null;
       }
       pendingMouseMoveRef.current = null;
-      
+
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
       sendMouseEvent({
         event_type: 'down',
@@ -254,7 +254,7 @@ export function StudentFullView({
         mouseMoveTimeoutRef.current = null;
       }
       pendingMouseMoveRef.current = null;
-      
+
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
       sendMouseEvent({
         event_type: 'up',
@@ -275,7 +275,7 @@ export function StudentFullView({
         mouseMoveTimeoutRef.current = null;
       }
       pendingMouseMoveRef.current = null;
-      
+
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
       sendMouseEvent({
         event_type: 'click',
@@ -298,7 +298,7 @@ export function StudentFullView({
           mouseMoveTimeoutRef.current = null;
         }
         pendingMouseMoveRef.current = null;
-        
+
         sendMouseEvent({
           event_type: 'click',
           x: pos.x,
@@ -312,7 +312,7 @@ export function StudentFullView({
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (!isRemoteControlActive) return;
     e.preventDefault();
-    
+
     const pos = getNormalizedPosition(e);
     if (pos) {
       sendMouseEvent({
@@ -329,7 +329,7 @@ export function StudentFullView({
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!isRemoteControlActive) return;
     e.preventDefault();
-    
+
     sendKeyboardEvent({
       event_type: 'keydown',
       key: e.key,
@@ -346,7 +346,7 @@ export function StudentFullView({
   const handleKeyUp = useCallback((e: React.KeyboardEvent) => {
     if (!isRemoteControlActive) return;
     e.preventDefault();
-    
+
     sendKeyboardEvent({
       event_type: 'keyup',
       key: e.key,
@@ -365,7 +365,7 @@ export function StudentFullView({
     const newState = !isRemoteControlActive;
     setIsRemoteControlActive(newState);
     onToggleRemoteControl?.();
-    
+
     if (newState) {
       keyboardInputRef.current?.focus();
     }
@@ -392,8 +392,8 @@ export function StudentFullView({
           )}
         </div>
         <div className="header-actions">
-          <button 
-            onClick={handleToggleRemoteControl} 
+          <button
+            onClick={handleToggleRemoteControl}
             className={`btn remote-control-btn ${isRemoteControlActive ? 'active' : ''}`}
             title={isRemoteControlActive ? 'Tắt điều khiển từ xa' : 'Bật điều khiển từ xa'}
           >
@@ -419,7 +419,7 @@ export function StudentFullView({
       {/* Screen View */}
       <div className="full-view-screen">
         {isViewing && screenFrame ? (
-          <div 
+          <div
             ref={screenContainerRef}
             className={`screen-container ${isRemoteControlActive ? 'remote-control-screen' : ''}`}
             onMouseMove={isRemoteControlActive ? handleMouseMove : undefined}
@@ -429,9 +429,10 @@ export function StudentFullView({
             onContextMenu={handleContextMenu}
             onWheel={isRemoteControlActive ? handleWheel : undefined}
           >
-            <H264VideoPlayer 
+            <H264VideoPlayer
               frame={screenFrame}
               className="screen-image-full"
+              connectionId={student.id}
             />
             {isRemoteControlActive && (
               <div className="remote-control-overlay" />

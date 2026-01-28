@@ -180,7 +180,24 @@ pub struct RawFrame {
     pub height: u32,
 }
 
-/// Capture a raw RGBA frame (for H.264 encoding)
+/// Capture a raw RGBA/BGRA frame using a specific monitor (for H.264 encoding)
+pub fn capture_monitor_raw(monitor: &Monitor) -> Result<RawFrame, String> {
+    let image = monitor
+        .capture_image()
+        .map_err(|e| format!("Failed to capture screen: {}", e))?;
+
+    let width = image.width();
+    let height = image.height();
+    let rgba_data = image.into_raw();
+
+    Ok(RawFrame {
+        rgba_data,
+        width,
+        height,
+    })
+}
+
+/// Capture a raw RGBA frame (for H.264 encoding) - LEGACY (finds primary monitor every time)
 pub fn capture_raw_frame() -> Result<RawFrame, String> {
     let monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
 
@@ -188,22 +205,7 @@ pub fn capture_raw_frame() -> Result<RawFrame, String> {
         .first()
         .ok_or_else(|| "No monitors found".to_string())?;
 
-    let image = monitor
-        .capture_image()
-        .map_err(|e| format!("Failed to capture screen: {}", e))?;
-
-    let width = image.width();
-    let height = image.height();
-    let raw_pixels = image.into_raw();
-
-    // xcap returns RGBA directly on macOS (via image crate), so we don't need to swap
-    let rgba_data = raw_pixels;
-
-    Ok(RawFrame {
-        rgba_data,
-        width,
-        height,
-    })
+    capture_monitor_raw(monitor)
 }
 
 #[cfg(test)]

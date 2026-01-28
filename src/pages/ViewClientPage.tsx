@@ -63,43 +63,35 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
   useEffect(() => {
     initDatabase();
     checkKeypair();
-    
-    // Poll connections every second
+  }, []);
+
+  // Poll connections every second
+  useEffect(() => {
     const interval = setInterval(refreshConnections, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Poll screen frames for viewing connections
+  // Listen for real-time screen frames via Tauri events
   useEffect(() => {
-    const viewingConnections = connections.filter(c => c.status === 'Viewing');
-    if (viewingConnections.length === 0) return;
+    let unlistenAll: (() => void) | null = null;
 
-    const fetchFrames = async () => {
-      const newFrames: Record<string, ScreenFrame> = {};
-      
-      for (const conn of viewingConnections) {
-        try {
-          const frame = await invoke<ScreenFrame | null>('get_student_screen_frame', {
-            connectionId: conn.id,
-          });
-          if (frame) {
-            newFrames[conn.id] = frame;
-          }
-        } catch (e) {
-          // Ignore frame fetch errors
-        }
-      }
-      
-      if (Object.keys(newFrames).length > 0) {
-        setScreenFrames(prev => ({ ...prev, ...newFrames }));
-      }
+    const setupListener = async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const unlisten = await listen<[string, ScreenFrame]>('screen-frame', (event) => {
+        const [connId, frame] = event.payload;
+        setScreenFrames(prev => ({
+          ...prev,
+          [connId]: frame
+        }));
+      });
+      unlistenAll = unlisten;
     };
 
-    // Fetch frames at ~10 FPS
-    fetchFrames();
-    const frameInterval = setInterval(fetchFrames, 100);
-    return () => clearInterval(frameInterval);
-  }, [connections]);
+    setupListener();
+    return () => {
+      if (unlistenAll) unlistenAll();
+    };
+  }, []);
 
   const initDatabase = async () => {
     try {
@@ -165,7 +157,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       console.log(`[ViewClient] Connection initiated: ${result}`);
       setShowAddStudent(false);
       setNewStudentIp('');
-      
+
       // Save the device if not already saved
       if (saveName) {
         await saveDevice(ip, saveName, port);
@@ -209,9 +201,9 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
         'discover_lan_devices',
         { port: 3017, timeoutMs: 3000 }
       );
-      
+
       console.log(`[ViewClient] Found ${devices.length} devices:`, devices);
-      
+
       // Connect to discovered devices
       for (const device of devices) {
         try {
@@ -222,7 +214,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
           console.warn(`[ViewClient] Failed to connect to ${device.ip}:`, e);
         }
       }
-      
+
       if (devices.length === 0) {
         console.log('[ViewClient] No devices found on LAN');
         setError('Không tìm thấy máy học sinh nào trên mạng LAN');
@@ -239,7 +231,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     const disconnected = connections.filter(
       c => c.status === 'Disconnected' || (typeof c.status === 'object' && 'Error' in c.status)
     );
-    
+
     for (const conn of disconnected) {
       try {
         await invoke('connect_to_student', { ip: conn.ip, port: conn.port });
@@ -353,7 +345,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
         >
           {isScanning ? '🔍 Đang quét...' : '🔍 Quét LAN'}
         </button>
-        
+
         <button
           onClick={() => setShowAddStudent(true)}
           className="btn secondary"
@@ -361,7 +353,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
         >
           ➕ Thêm máy
         </button>
-        
+
         <button
           onClick={connectAll}
           className="btn secondary"
@@ -369,7 +361,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
         >
           🔗 Kết nối tất cả
         </button>
-        
+
         <button
           onClick={disconnectAll}
           className="btn secondary"
@@ -465,7 +457,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
                 }}
               />
             ))}
-            
+
             {/* Saved devices that are not currently connected */}
             {savedDevices
               .filter(device => !connections.some(c => c.ip === device.ip && c.port === device.port))
@@ -483,13 +475,13 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
                     <div className="student-status disconnected">Chưa kết nối</div>
                   </div>
                   <div className="thumbnail-actions">
-                    <button 
+                    <button
                       onClick={() => connectToStudent(device.ip, device.port)}
                       className="btn small primary"
                     >
                       🔗 Kết nối
                     </button>
-                    <button 
+                    <button
                       onClick={() => removeDevice(device.id)}
                       className="btn small danger"
                     >
@@ -501,14 +493,14 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
           </>
         )}
       </div>
-      
+
       {/* Saved devices count */}
       {savedDevices.length > 0 && (
         <div className="saved-devices-summary">
           <p>💾 {savedDevices.length} máy đã lưu</p>
         </div>
       )}
-      
+
       {/* Debug Panel */}
       <DebugPanel />
     </div>

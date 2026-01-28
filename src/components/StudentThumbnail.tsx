@@ -145,70 +145,71 @@ export function StudentThumbnail({
 
   return (
     <>
-      <div 
+      <div
         className={`student-thumbnail ${statusClass}`}
         onClick={isConnected ? onClick : undefined}
         onContextMenu={handleContextMenu}
       >
         {/* Screen Preview Area */}
         <div className="thumbnail-screen">
-        {isViewing && screenFrame ? (
-          <div className="screen-preview">
-            <H264VideoPlayer 
-              frame={screenFrame}
-              className="screen-image"
-            />
-          </div>
-        ) : isViewing ? (
-          <div className="screen-preview">
-            <div className="preview-placeholder">
-              <span className="spinner">🔄</span>
-              <p>Đang tải màn hình...</p>
+          {isViewing && screenFrame ? (
+            <div className="screen-preview">
+              <H264VideoPlayer
+                frame={screenFrame}
+                className="screen-image"
+                connectionId={student.id}
+              />
             </div>
-          </div>
-        ) : isConnected ? (
-          <div className="screen-placeholder connected">
-            <span>✅</span>
-            <p>Click để xem</p>
-          </div>
-        ) : isConnecting ? (
-          <div className="screen-placeholder connecting">
-            <span className="spinner">⏳</span>
-            <p>Đang kết nối...</p>
-          </div>
-        ) : hasError ? (
-          <div className="screen-placeholder error">
-            <span>❌</span>
-            <p>Lỗi kết nối</p>
-          </div>
-        ) : (
-          <div className="screen-placeholder offline">
-            <span>💤</span>
-            <p>Offline</p>
-          </div>
-        )}
-      </div>
+          ) : isViewing ? (
+            <div className="screen-preview">
+              <div className="preview-placeholder">
+                <span className="spinner">🔄</span>
+                <p>Đang tải màn hình...</p>
+              </div>
+            </div>
+          ) : isConnected ? (
+            <div className="screen-placeholder connected">
+              <span>✅</span>
+              <p>Click để xem</p>
+            </div>
+          ) : isConnecting ? (
+            <div className="screen-placeholder connecting">
+              <span className="spinner">⏳</span>
+              <p>Đang kết nối...</p>
+            </div>
+          ) : hasError ? (
+            <div className="screen-placeholder error">
+              <span>❌</span>
+              <p>Lỗi kết nối</p>
+            </div>
+          ) : (
+            <div className="screen-placeholder offline">
+              <span>💤</span>
+              <p>Offline</p>
+            </div>
+          )}
+        </div>
 
-      {/* Info Bar */}
-      <div className="thumbnail-info">
-        <div className="student-name">{displayName}</div>
-        <div className="student-ip">{student.ip}:{student.port}</div>
-        <div className={`student-status ${statusClass}`}>{statusText}</div>
-      </div>
+        {/* Info Bar */}
+        <div className="thumbnail-info">
+          <div className="student-name">{displayName}</div>
+          <div className="student-ip">{student.ip}:{student.port}</div>
+          <div className={`student-status ${statusClass}`}>{statusText}</div>
+        </div>
 
-      {/* Actions */}
-      <div className="thumbnail-actions">
-        {isDisconnected || hasError ? (
-          <button onClick={(e) => { e.stopPropagation(); onConnect(); }} className="btn small primary">
-            🔗 Kết nối
-          </button>
-        ) : isConnected ? (
-          <button onClick={(e) => { e.stopPropagation(); onDisconnect(); }} className="btn small danger">
-            🔌 Ngắt
-          </button>
-        ) : null}
+        {/* Actions */}
+        <div className="thumbnail-actions">
+          {isDisconnected || hasError ? (
+            <button onClick={(e) => { e.stopPropagation(); onConnect(); }} className="btn small primary">
+              🔗 Kết nối
+            </button>
+          ) : isConnected ? (
+            <button onClick={(e) => { e.stopPropagation(); onDisconnect(); }} className="btn small danger">
+              🔌 Ngắt
+            </button>
+          ) : null}
+        </div>
       </div>
-    </div>
 
       {/* Context Menu */}
       {contextMenu && contextMenuItems.length > 0 && (

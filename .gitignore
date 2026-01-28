@@ -24,3 +24,4 @@ dist-student/
 *.sln
 *.sw?
 .cursor/
+.agent/

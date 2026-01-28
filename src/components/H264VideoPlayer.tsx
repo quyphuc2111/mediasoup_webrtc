@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 
 interface ScreenFrame {
   data?: string | null;  // Base64 encoded (for JPEG fallback only)
@@ -14,6 +15,7 @@ interface ScreenFrame {
 interface H264VideoPlayerProps {
   frame?: ScreenFrame | null;
   className?: string;
+  connectionId?: string;
 }
 
 // Check if WebCodecs is supported
@@ -36,7 +38,7 @@ function arrayToUint8Array(arr: number[]): Uint8Array {
   return new Uint8Array(arr);
 }
 
-export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
+export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -96,6 +98,11 @@ export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
           errorCountRef.current++;
           console.error(`[H264Player] Decoder error (${errorCountRef.current}):`, e);
 
+          // Request a new keyframe from the student if we get errors
+          if (connectionId) {
+            invoke('send_remote_keyframe_request', { connectionId }).catch(console.error);
+          }
+
           // After 5 consecutive errors, fallback to JPEG
           if (errorCountRef.current >= 5) {
             console.warn('[H264Player] Too many errors, falling back to JPEG');
@@ -113,52 +120,34 @@ export function H264VideoPlayer({ frame, className }: H264VideoPlayerProps) {
         },
       });
 
-      // Configure for H.264 Baseline profile
-      // Try different codec strings for compatibility
-      const codecStrings = [
-        'avc1.42001f', // H.264 Baseline Level 3.1
-        'avc1.42E01f', // H.264 Baseline Level 3.1 (alternative)
-        'avc1.4d001f', // H.264 Main Profile Level 3.1
-      ];
-
-      let configured = false;
-      let lastError: any = null;
-
-      for (const codecStr of codecStrings) {
-        try {
-          const config: VideoDecoderConfig = {
-            codec: codecStr,
-            codedWidth: width,
-            codedHeight: height,
-            optimizeForLatency: true,
-          };
-
-          // Add description if available (SPS/PPS)
-          if (description) {
-            config.description = description;
-            console.log(`[H264Player] Configuring with codec ${codecStr} and description (${description.length} bytes)`);
-          } else {
-            console.log(`[H264Player] Configuring with codec ${codecStr} without description`);
-          }
-
-          decoder.configure(config);
-          configured = true;
-          console.log(`[H264Player] Successfully configured with ${codecStr}`);
-          break;
-        } catch (e: any) {
-          lastError = e;
-          console.warn(`[H264Player] Failed to configure with ${codecStr}:`, e);
-        }
+      // Build codec string from description if available
+      let codecStr = 'avc1.42E01f'; // Default Baseline
+      if (description && description.length >= 4) {
+        // avc1.PPCCLL where PP=profile, CC=compat, LL=level (in hex)
+        const profile = description[1].toString(16).padStart(2, '0').toUpperCase();
+        const compat = description[2].toString(16).padStart(2, '0').toUpperCase();
+        const level = description[3].toString(16).padStart(2, '0').toUpperCase();
+        codecStr = `avc1.${profile}${compat}${level}`;
+        console.log(`[H264Player] Detected codec from SPS: ${codecStr}`);
       }
 
-      if (!configured) {
-        throw lastError || new Error('Failed to configure with any codec string');
+      const config: VideoDecoderConfig = {
+        codec: codecStr,
+        codedWidth: width,
+        codedHeight: height,
+        optimizeForLatency: true,
+        hardwareAcceleration: 'prefer-hardware',
+      };
+
+      if (description) {
+        config.description = description;
       }
 
-      decoderRef.current = decoder;
+      decoder.configure(config);
       setIsInitialized(true);
       setError(null);
-      errorCountRef.current = 0; // Reset error count on successful init
+      errorCountRef.current = 0;
+      decoderRef.current = decoder;
       console.log(`[H264Player] Decoder initialized for ${width}x${height}`, description ? 'with description' : '');
       return true;
     } catch (e: any) {

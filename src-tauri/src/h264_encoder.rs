@@ -48,19 +48,20 @@ impl H264Encoder {
         
         let api = OpenH264API::from_source();
         let config = EncoderConfig::new()
-            .max_frame_rate(30.0)
-            .set_bitrate_bps(2_000_000) // 2 Mbps
+            .max_frame_rate(60.0) // Match new capture rate
+            .set_bitrate_bps(5_000_000) // Increase to 5 Mbps for 1080p quality
             .enable_skip_frame(false);
         
-        let encoder = Encoder::with_api_config(api, config)
+        // OpenH264 specific: real-time usage type
+        let mut encoder = Encoder::with_api_config(api, config)
             .map_err(|e| format!("Failed to create encoder: {:?}", e))?;
-        
+            
         Ok(Self {
             encoder: Mutex::new(encoder),
             width,
             height,
             frame_count: Mutex::new(0),
-            keyframe_interval: 30, // Keyframe every 30 frames (~1 second at 30fps)
+            keyframe_interval: 60, // Keyframe every 1 second at 60fps
         })
     }
     
@@ -73,8 +74,8 @@ impl H264Encoder {
             // Recreate encoder for new dimensions
             let api = OpenH264API::from_source();
             let config = EncoderConfig::new()
-                .max_frame_rate(30.0)
-                .set_bitrate_bps(2_000_000)
+                .max_frame_rate(60.0)
+                .set_bitrate_bps(5_000_000)
                 .enable_skip_frame(false);
             
             let encoder = Encoder::with_api_config(api, config)
@@ -457,7 +458,8 @@ impl H264Encoder {
     }
 }
 
-/// Convert RGBA to YUV420 planar format (optimized with parallel processing)
+/// Convert RGBA to YUV420 planar format using BT.709 (HD) coefficients
+/// Optimized with parallel processing
 fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     let width = width as usize;
     let height = height as usize;
@@ -470,51 +472,79 @@ fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     let (y_plane, uv_planes) = yuv.split_at_mut(y_size);
     let (u_plane, v_plane) = uv_planes.split_at_mut(uv_size);
     
-    // Process Y plane in parallel (process rows in parallel)
+    // BT.709 coefficients (for HD)
+    // Optimized integer math: shift by 8 bits
+    // Y' = 0.2126 R' + 0.7152 G' + 0.0722 B'
+    // Cb = 0.5 R' - 0.4542 G' - 0.0458 B' + 128
+    // Cr = -0.1146 R' - 0.3854 G' + 0.5 B' + 128
+    
+    const RY: i32 = 54;  // 0.2126 * 256
+    const GY: i32 = 183; // 0.7152 * 256
+    const BY: i32 = 18;  // 0.0722 * 256
+    
+    const RU: i32 = -29; // -0.1146 * 256
+    const GU: i32 = -99; // -0.3854 * 256
+    const BU: i32 = 128; // 0.5 * 256
+    
+    const RV: i32 = 128; // 0.5 * 256
+    const GV: i32 = -116; // -0.4542 * 256
+    const BV: i32 = -12; // -0.0458 * 256
+
+    // Process Y plane in parallel rows
     y_plane.par_chunks_mut(width).enumerate().for_each(|(y, y_row)| {
+        let rgba_row = &rgba[y * width * 4 .. (y + 1) * width * 4];
         for x in 0..width {
-            let rgba_idx = (y * width + x) * 4;
-            let r = rgba[rgba_idx] as i32;
-            let g = rgba[rgba_idx + 1] as i32;
-            let b = rgba[rgba_idx + 2] as i32;
+            // xcap returns BGRA on most platforms. 
+            // Index 0: Blue, Index 1: Green, Index 2: Red
+            let b = rgba_row[x * 4] as i32;
+            let g = rgba_row[x * 4 + 1] as i32;
+            let r = rgba_row[x * 4 + 2] as i32;
             
-            // ITU-R BT.601 conversion
-            let y_val = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-            y_row[x] = y_val.clamp(0, 255) as u8;
+            let y_val = (RY * r + GY * g + BY * b + 128) >> 8;
+            y_row[x] = y_val.clamp(16, 235) as u8;
         }
     });
     
-    // Process UV planes (sequential is fine since it's smaller than Y plane)
-    for uv_y in 0..(height / 2) {
-        for uv_x in 0..(width / 2) {
-            let src_y = uv_y * 2;
-            let src_x = uv_x * 2;
+    // Process UV planes (subsampled) safely in parallel
+    let half_width = width / 2;
+    
+    u_plane.par_chunks_mut(half_width)
+        .zip(v_plane.par_chunks_mut(half_width))
+        .enumerate()
+        .for_each(|(uv_y, (u_row, v_row))| {
+            let y1 = uv_y * 2;
+            let y2 = y1 + 1;
             
-            // Average 2x2 block for U and V
-            let mut r_sum = 0i32;
-            let mut g_sum = 0i32;
-            let mut b_sum = 0i32;
-            
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let rgba_idx = ((src_y + dy) * width + (src_x + dx)) * 4;
-                    r_sum += rgba[rgba_idx] as i32;
-                    g_sum += rgba[rgba_idx + 1] as i32;
-                    b_sum += rgba[rgba_idx + 2] as i32;
+            for uv_x in 0..half_width {
+                let x1 = uv_x * 2;
+                let x2 = x1 + 1;
+                
+                // Average 2x2 block for chrominance
+                let mut r_sum = 0i32;
+                let mut g_sum = 0i32;
+                let mut b_sum = 0i32;
+                
+                for y in [y1, y2] {
+                    let row_off = y * width * 4;
+                    for x in [x1, x2] {
+                        let off = row_off + x * 4;
+                        b_sum += rgba[off] as i32;
+                        g_sum += rgba[off + 1] as i32;
+                        r_sum += rgba[off + 2] as i32;
+                    }
                 }
+                
+                let r = r_sum >> 2;
+                let g = g_sum >> 2;
+                let b = b_sum >> 2;
+                
+                let u_val = (RU * r + GU * g + BU * b + 128) >> 8;
+                let v_val = (RV * r + GV * g + BV * b + 128) >> 8;
+                
+                u_row[uv_x] = (u_val + 128).clamp(16, 240) as u8;
+                v_row[uv_x] = (v_val + 128).clamp(16, 240) as u8;
             }
-            
-            let r = r_sum / 4;
-            let g = g_sum / 4;
-            let b = b_sum / 4;
-            
-            let uv_idx = uv_y * (width / 2) + uv_x;
-            let u_val = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-            let v_val = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-            u_plane[uv_idx] = u_val.clamp(0, 255) as u8;
-            v_plane[uv_idx] = v_val.clamp(0, 255) as u8;
-        }
-    }
+        });
     
     yuv
 }

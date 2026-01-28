@@ -6,7 +6,7 @@
 //! 3. Captures and streams screen to teacher
 //! 4. Receives and executes remote input (mouse/keyboard)
 
-use enigo::{Enigo, Key, Keyboard, Mouse, Settings, Button, Direction, Coordinate};
+use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -117,6 +117,9 @@ pub enum TeacherMessage {
 
     #[serde(rename = "keyboard_input")]
     KeyboardInput { event: KeyboardInputEvent },
+
+    #[serde(rename = "request_keyframe")]
+    RequestKeyframe,
 }
 
 /// Messages from student to teacher
@@ -164,6 +167,7 @@ struct TeacherConnection {
     challenge: Vec<u8>,
     screen_sharing: bool,
     stop_capture: Option<Arc<AtomicBool>>,
+    keyframe_request_tx: Option<broadcast::Sender<()>>,
 }
 
 /// State shared across the agent
@@ -256,6 +260,7 @@ async fn handle_connection(
                 challenge: challenge.clone(),
                 screen_sharing: false,
                 stop_capture: None,
+                keyframe_request_tx: None,
             },
         );
     }
@@ -616,6 +621,31 @@ where
                 log::warn!("[StudentAgent] Failed to handle keyboard input: {}", e);
             }
         }
+
+        TeacherMessage::RequestKeyframe => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            // We signal the capture loop to send a keyframe
+            if let Ok(conns) = state.connections.lock() {
+                if let Some(conn) = conns.get(&addr) {
+                    if let Some(ref tx) = conn.keyframe_request_tx {
+                        let _ = tx.send(());
+                        log::info!(
+                            "[StudentAgent] Keyframe request signaled to capture loop for {}",
+                            addr
+                        );
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -637,16 +667,17 @@ fn start_screen_capture(
         }
     }
 
-    // Create stop flag
+    // Create stop flag and keyframe request channel
     let stop_flag = Arc::new(AtomicBool::new(false));
-    let stop_flag_clone = Arc::clone(&stop_flag);
+    let (keyframe_tx, mut keyframe_rx) = broadcast::channel(1);
 
     // Update connection state
     {
         let mut conns = state.connections.lock().unwrap();
         if let Some(conn) = conns.get_mut(&addr) {
             conn.screen_sharing = true;
-            conn.stop_capture = Some(stop_flag);
+            conn.stop_capture = Some(Arc::clone(&stop_flag));
+            conn.keyframe_request_tx = Some(keyframe_tx);
         }
     }
 
@@ -657,9 +688,29 @@ fn start_screen_capture(
     tokio::spawn(async move {
         crate::log_debug("info", "[ScreenCapture] Starting H.264 capture loop");
 
+        // Get primary monitor once and cache it
+        let monitors = match xcap::Monitor::all() {
+            Ok(m) => m,
+            Err(e) => {
+                crate::log_debug(
+                    "error",
+                    &format!("[ScreenCapture] Failed to get monitors: {}", e),
+                );
+                return;
+            }
+        };
+
+        let monitor = match monitors.first() {
+            Some(m) => m,
+            None => {
+                crate::log_debug("error", "[ScreenCapture] No monitors found");
+                return;
+            }
+        };
+
         // Get initial screen resolution
-        let (init_width, init_height) =
-            screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
+        let init_width = monitor.width();
+        let init_height = monitor.height();
 
         // Create H.264 encoder
         let mut encoder = match H264Encoder::new(init_width, init_height) {
@@ -684,8 +735,17 @@ fn start_screen_capture(
         let start_time = std::time::Instant::now();
         let mut frame_count: u64 = 0;
 
-        while !stop_flag_clone.load(Ordering::Relaxed) {
-            match screen_capture::capture_raw_frame() {
+        while !stop_flag.load(Ordering::Relaxed) {
+            // Check for keyframe request
+            if let Ok(_) = keyframe_rx.try_recv() {
+                encoder.request_keyframe();
+                crate::log_debug(
+                    "info",
+                    "[ScreenCapture] Forcing keyframe due to teacher request",
+                );
+            }
+
+            match screen_capture::capture_monitor_raw(monitor) {
                 Ok(raw_frame) => {
                     let timestamp = start_time.elapsed().as_millis() as u64;
 
@@ -752,8 +812,8 @@ fn start_screen_capture(
                 }
             }
 
-            // ~30 FPS (H.264 can handle higher frame rate efficiently)
-            tokio::time::sleep(tokio::time::Duration::from_millis(33)).await;
+            // ~60 FPS for smooth experience
+            tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
         }
 
         println!("[ScreenCapture] H.264 capture loop ended");
@@ -779,82 +839,95 @@ where
 /// Handle mouse input event from teacher
 fn handle_mouse_input(event: &MouseInputEvent) -> Result<(), String> {
     // Get screen resolution for coordinate conversion
-    let (screen_width, screen_height) = screen_capture::get_screen_resolution()
-        .unwrap_or((1920, 1080));
-    
+    let (screen_width, screen_height) =
+        screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
+
     // Convert normalized coordinates to screen coordinates
     let x = (event.x * screen_width as f64) as i32;
     let y = (event.y * screen_height as f64) as i32;
 
     // Create Enigo instance
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| format!("Failed to create Enigo: {}", e))?;
 
     match event.event_type.as_str() {
         "move" => {
-            enigo.move_mouse(x, y, Coordinate::Abs)
+            enigo
+                .move_mouse(x, y, Coordinate::Abs)
                 .map_err(|e| format!("Failed to move mouse: {}", e))?;
         }
         "click" => {
             // Move to position first
-            enigo.move_mouse(x, y, Coordinate::Abs)
+            enigo
+                .move_mouse(x, y, Coordinate::Abs)
                 .map_err(|e| format!("Failed to move mouse: {}", e))?;
-            
+
             // Determine button
             let button = match event.button {
                 Some(MouseButton::Left) | None => Button::Left,
                 Some(MouseButton::Right) => Button::Right,
                 Some(MouseButton::Middle) => Button::Middle,
             };
-            
+
             // Click
-            enigo.button(button, Direction::Click)
+            enigo
+                .button(button, Direction::Click)
                 .map_err(|e| format!("Failed to click: {}", e))?;
         }
         "down" => {
-            enigo.move_mouse(x, y, Coordinate::Abs)
+            enigo
+                .move_mouse(x, y, Coordinate::Abs)
                 .map_err(|e| format!("Failed to move mouse: {}", e))?;
-            
+
             let button = match event.button {
                 Some(MouseButton::Left) | None => Button::Left,
                 Some(MouseButton::Right) => Button::Right,
                 Some(MouseButton::Middle) => Button::Middle,
             };
-            
-            enigo.button(button, Direction::Press)
+
+            enigo
+                .button(button, Direction::Press)
                 .map_err(|e| format!("Failed to press button: {}", e))?;
         }
         "up" => {
-            enigo.move_mouse(x, y, Coordinate::Abs)
+            enigo
+                .move_mouse(x, y, Coordinate::Abs)
                 .map_err(|e| format!("Failed to move mouse: {}", e))?;
-            
+
             let button = match event.button {
                 Some(MouseButton::Left) | None => Button::Left,
                 Some(MouseButton::Right) => Button::Right,
                 Some(MouseButton::Middle) => Button::Middle,
             };
-            
-            enigo.button(button, Direction::Release)
+
+            enigo
+                .button(button, Direction::Release)
                 .map_err(|e| format!("Failed to release button: {}", e))?;
         }
         "scroll" => {
-            enigo.move_mouse(x, y, Coordinate::Abs)
+            enigo
+                .move_mouse(x, y, Coordinate::Abs)
                 .map_err(|e| format!("Failed to move mouse: {}", e))?;
-            
+
             if let Some(delta_y) = event.delta_y {
                 // Negative delta means scroll up, positive means scroll down
                 let scroll_amount = if delta_y > 0.0 { -1 } else { 1 };
-                enigo.scroll(scroll_amount, enigo::Axis::Vertical)
+                enigo
+                    .scroll(scroll_amount, enigo::Axis::Vertical)
                     .map_err(|e| format!("Failed to scroll: {}", e))?;
             }
             if let Some(delta_x) = event.delta_x {
                 let scroll_amount = if delta_x > 0.0 { -1 } else { 1 };
-                enigo.scroll(scroll_amount, enigo::Axis::Horizontal)
+                enigo
+                    .scroll(scroll_amount, enigo::Axis::Horizontal)
                     .map_err(|e| format!("Failed to scroll horizontal: {}", e))?;
             }
         }
         _ => {
-            log::warn!("[StudentAgent] Unknown mouse event type: {}", event.event_type);
+            log::warn!(
+                "[StudentAgent] Unknown mouse event type: {}",
+                event.event_type
+            );
         }
     }
 
@@ -863,8 +936,8 @@ fn handle_mouse_input(event: &MouseInputEvent) -> Result<(), String> {
 
 /// Handle keyboard input event from teacher
 fn handle_keyboard_input(event: &KeyboardInputEvent) -> Result<(), String> {
-    let mut enigo = Enigo::new(&Settings::default())
-        .map_err(|e| format!("Failed to create Enigo: {}", e))?;
+    let mut enigo =
+        Enigo::new(&Settings::default()).map_err(|e| format!("Failed to create Enigo: {}", e))?;
 
     // Convert key code to enigo Key
     let key = code_to_key(&event.code, &event.key);
@@ -877,24 +950,29 @@ fn handle_keyboard_input(event: &KeyboardInputEvent) -> Result<(), String> {
 
     // Handle modifiers
     if event.modifiers.ctrl {
-        enigo.key(Key::Control, Direction::Press)
+        enigo
+            .key(Key::Control, Direction::Press)
             .map_err(|e| format!("Failed to press Ctrl: {}", e))?;
     }
     if event.modifiers.alt {
-        enigo.key(Key::Alt, Direction::Press)
+        enigo
+            .key(Key::Alt, Direction::Press)
             .map_err(|e| format!("Failed to press Alt: {}", e))?;
     }
     if event.modifiers.shift {
-        enigo.key(Key::Shift, Direction::Press)
+        enigo
+            .key(Key::Shift, Direction::Press)
             .map_err(|e| format!("Failed to press Shift: {}", e))?;
     }
     if event.modifiers.meta {
-        enigo.key(Key::Meta, Direction::Press)
+        enigo
+            .key(Key::Meta, Direction::Press)
             .map_err(|e| format!("Failed to press Meta: {}", e))?;
     }
 
     // Press/release the key
-    enigo.key(key, direction)
+    enigo
+        .key(key, direction)
         .map_err(|e| format!("Failed to handle key: {}", e))?;
 
     // Release modifiers on keyup
@@ -946,7 +1024,7 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "KeyX" => Key::Unicode('x'),
         "KeyY" => Key::Unicode('y'),
         "KeyZ" => Key::Unicode('z'),
-        
+
         // Numbers
         "Digit0" => Key::Unicode('0'),
         "Digit1" => Key::Unicode('1'),
@@ -958,7 +1036,7 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "Digit7" => Key::Unicode('7'),
         "Digit8" => Key::Unicode('8'),
         "Digit9" => Key::Unicode('9'),
-        
+
         // Function keys
         "F1" => Key::F1,
         "F2" => Key::F2,
@@ -972,7 +1050,7 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "F10" => Key::F10,
         "F11" => Key::F11,
         "F12" => Key::F12,
-        
+
         // Special keys
         "Enter" => Key::Return,
         "Escape" => Key::Escape,
@@ -984,19 +1062,19 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "End" => Key::End,
         "PageUp" => Key::PageUp,
         "PageDown" => Key::PageDown,
-        
+
         // Arrow keys
         "ArrowUp" => Key::UpArrow,
         "ArrowDown" => Key::DownArrow,
         "ArrowLeft" => Key::LeftArrow,
         "ArrowRight" => Key::RightArrow,
-        
+
         // Modifiers (handled separately but included for completeness)
         "ShiftLeft" | "ShiftRight" => Key::Shift,
         "ControlLeft" | "ControlRight" => Key::Control,
         "AltLeft" | "AltRight" => Key::Alt,
         "MetaLeft" | "MetaRight" => Key::Meta,
-        
+
         // Punctuation and symbols
         "Minus" => Key::Unicode('-'),
         "Equal" => Key::Unicode('='),
@@ -1009,7 +1087,7 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "Comma" => Key::Unicode(','),
         "Period" => Key::Unicode('.'),
         "Slash" => Key::Unicode('/'),
-        
+
         // Numpad
         "Numpad0" => Key::Unicode('0'),
         "Numpad1" => Key::Unicode('1'),
@@ -1027,7 +1105,7 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "NumpadDecimal" => Key::Unicode('.'),
         "NumpadDivide" => Key::Unicode('/'),
         "NumpadEnter" => Key::Return,
-        
+
         // Default: try to use the key character
         _ => {
             if key.len() == 1 {

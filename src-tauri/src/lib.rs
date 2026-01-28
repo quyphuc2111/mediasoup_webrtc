@@ -918,6 +918,7 @@ fn get_connector_runtime() -> &'static tokio::runtime::Runtime {
 /// Connect to a student agent
 #[tauri::command]
 fn connect_to_student(
+    app: AppHandle,
     ip: String,
     port: u16,
     state: State<'_, Arc<ConnectorState>>,
@@ -961,6 +962,7 @@ fn connect_to_student(
     let state_clone = Arc::clone(&state);
     let ip_clone = ip.clone();
     let id_clone = id.clone();
+    let app_handle = app.clone();
 
     println!("[TeacherConnector] Spawning connection to {}:{}", ip, port);
 
@@ -974,6 +976,7 @@ fn connect_to_student(
             id_clone.clone(),
             ip_clone.clone(),
             port,
+            app_handle,
         )
         .await
         {
@@ -1062,6 +1065,14 @@ fn send_remote_keyboard_event(
     teacher_connector::send_keyboard_input(&state, &student_id, event)
 }
 
+#[tauri::command]
+fn send_remote_keyframe_request(
+    connection_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::request_keyframe(&state, &connection_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1127,7 +1138,8 @@ pub fn run() {
             get_student_screen_frame,
             // Remote Control commands
             send_remote_mouse_event,
-            send_remote_keyboard_event
+            send_remote_keyboard_event,
+            send_remote_keyframe_request
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

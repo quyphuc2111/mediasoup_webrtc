@@ -9,6 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -141,6 +142,9 @@ pub enum TeacherMessage {
 
     #[serde(rename = "keyboard_input")]
     KeyboardInput { event: KeyboardInputEvent },
+
+    #[serde(rename = "request_keyframe")]
+    RequestKeyframe,
 }
 
 /// Command to send to a connection handler
@@ -308,6 +312,7 @@ pub async fn connect_to_student_with_auth(
             port,
             cmd_rx,
             credentials_clone,
+            None, // No app handle initially
         )
         .await
         {
@@ -324,6 +329,7 @@ pub async fn handle_connection_async(
     id: String,
     ip: String,
     port: u16,
+    app_handle: AppHandle,
 ) -> Result<(), String> {
     println!(
         "[TeacherConnector] handle_connection_async called for {}:{}",
@@ -344,6 +350,7 @@ pub async fn handle_connection_async(
         port,
         cmd_rx,
         AuthCredentials::Ed25519,
+        Some(app_handle),
     )
     .await;
 
@@ -368,6 +375,7 @@ async fn handle_connection(
     port: u16,
     mut cmd_rx: mpsc::Receiver<ConnectionCommand>,
     credentials: AuthCredentials,
+    app_handle: Option<AppHandle>,
 ) -> Result<(), String> {
     let url = format!("ws://{}:{}", ip, port);
     println!(
@@ -521,54 +529,36 @@ async fn handle_connection(
                                 continue;
                             }
 
-                            // Extract H.264 Annex-B data
-                            let h264_data = &data[desc_end..];
-
-                            // Decode H.264 to JPEG using decoder
-                            let jpeg_result = {
-                                let mut decoders = match state.decoders.lock() {
-                                    Ok(d) => d,
-                                    Err(e) => {
-                                        log::error!("[TeacherConnector] Failed to lock decoders: {}", e);
-                                        continue;
-                                    }
-                                };
-
-                                // Get or create decoder for this connection
-                                let decoder = decoders.entry(id.clone()).or_insert_with(|| {
-                                    log::info!("[TeacherConnector] H.264 decoder for connection: {}", id);
-                                    crate::h264_decoder::H264Decoder::new().unwrap()
-                                });
-
-                                // Decode H.264 to JPEG
-                                decoder.decode_to_jpeg(h264_data)
+                            // Extract SPS/PPS (AVCC description)
+                            let sps_pps = if desc_len > 0 {
+                                Some(data[desc_start..desc_end].to_vec())
+                            } else {
+                                None
                             };
 
-                            match jpeg_result {
-                                Ok(Some(jpeg_base64)) => {
-                                    // Successfully decoded to JPEG
-                                    let frame = ScreenFrame {
-                                        data: Some(jpeg_base64),  // JPEG base64
-                                        data_binary: None,  // No raw H.264
-                                        sps_pps: None,  // Not needed for JPEG
-                                        timestamp,
-                                        width,
-                                        height,
-                                        is_keyframe: true,  // JPEG frames are always complete
-                                        codec: "jpeg".to_string(),
-                                    };
+                            // Extract H.264 Annex-B data
+                            let h264_data = data[desc_end..].to_vec();
 
-                                    if let Ok(mut frames) = state.screen_frames.lock() {
-                                        frames.insert(id.clone(), frame);
-                                    }
-                                }
-                                Ok(None) => {
-                                    // Frame not ready yet (waiting for keyframe or incomplete)
-                                    log::debug!("[TeacherConnector] Frame not ready (waiting for keyframe)");
-                                }
-                                Err(e) => {
-                                    log::error!("[TeacherConnector] H.264 decode error for {}: {}", id, e);
-                                }
+                            // Create the ScreenFrame with raw binary data - NO CPU-HEAVY DECODING HERE
+                            let frame = ScreenFrame {
+                                data: None, // No JPEG base64 string
+                                data_binary: Some(h264_data),
+                                sps_pps,
+                                timestamp,
+                                width,
+                                height,
+                                is_keyframe,
+                                codec: "h264".to_string(),
+                            };
+
+                            // Update state
+                            if let Ok(mut frames) = state.screen_frames.lock() {
+                                frames.insert(id.clone(), frame.clone());
+                            }
+
+                            // Emit event to frontend for real-time push
+                            if let Some(ref app) = app_handle {
+                                let _ = app.emit("screen-frame", (id.clone(), frame));
                             }
                         }
                     }
@@ -615,7 +605,7 @@ async fn handle_connection(
                             let start = std::time::Instant::now();
                             let mut pending_non_move: Option<MouseInputEvent> = None;
                             let mut pending_other_cmd: Option<ConnectionCommand> = None;
-                            
+
                             while events.len() < MAX_BATCH_SIZE && start.elapsed().as_millis() < BATCH_TIMEOUT_MS as u128 {
                                 let remaining_time = BATCH_TIMEOUT_MS.saturating_sub(start.elapsed().as_millis() as u64);
                                 match tokio::time::timeout(
@@ -841,7 +831,11 @@ pub fn stop_screen(state: &ConnectorState, id: &str) -> Result<(), String> {
 }
 
 /// Send mouse input to student
-pub fn send_mouse_input(state: &ConnectorState, id: &str, event: MouseInputEvent) -> Result<(), String> {
+pub fn send_mouse_input(
+    state: &ConnectorState,
+    id: &str,
+    event: MouseInputEvent,
+) -> Result<(), String> {
     let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
 
     if let Some(sender) = senders.get(id) {
@@ -856,13 +850,34 @@ pub fn send_mouse_input(state: &ConnectorState, id: &str, event: MouseInputEvent
 }
 
 /// Send keyboard input to student
-pub fn send_keyboard_input(state: &ConnectorState, id: &str, event: KeyboardInputEvent) -> Result<(), String> {
+pub fn send_keyboard_input(
+    state: &ConnectorState,
+    id: &str,
+    event: KeyboardInputEvent,
+) -> Result<(), String> {
     let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
 
     if let Some(sender) = senders.get(id) {
         sender
             .try_send(ConnectionCommand::SendKeyboardInput(event))
             .map_err(|e| format!("Failed to send keyboard input: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Request a keyframe from student
+pub fn request_keyframe(state: &ConnectorState, id: &str) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendTeacherMessage(
+                TeacherMessage::RequestKeyframe,
+            ))
+            .map_err(|e| format!("Failed to send keyframe request: {}", e))?;
     } else {
         return Err("Connection not found".to_string());
     }
