@@ -684,9 +684,12 @@ fn start_screen_capture(
     // Clone frame_tx for the capture thread
     let frame_tx_clone = frame_tx.clone();
 
-    // Start capture in background with H.264 encoding
-    tokio::spawn(async move {
-        crate::log_debug("info", "[ScreenCapture] Starting H.264 capture loop");
+    // Start capture in background thread to avoid Send issues with Monitor handles
+    std::thread::spawn(move || {
+        crate::log_debug(
+            "info",
+            "[ScreenCapture] Starting H.264 capture loop (background thread)",
+        );
 
         // Get primary monitor once and cache it
         let monitors = match xcap::Monitor::all() {
@@ -757,13 +760,6 @@ fn start_screen_capture(
                         timestamp,
                     ) {
                         Ok(encoded) => {
-                            // Create binary frame format:
-                            // [1 byte: frame_type]
-                            // [8 bytes: timestamp]
-                            // [4 bytes: height]
-                            // [2 bytes: description_length] (0 if no description)
-                            // [description_length bytes: AVCC description] (only for keyframes)
-                            // [H.264 Annex-B data]
                             let desc_len = encoded.sps_pps.as_ref().map(|d| d.len()).unwrap_or(0);
                             let mut binary_frame =
                                 Vec::with_capacity(19 + desc_len + encoded.data.len());
@@ -783,7 +779,7 @@ fn start_screen_capture(
                             binary_frame.extend_from_slice(&encoded.data);
 
                             if frame_tx_clone.try_send(binary_frame).is_err() {
-                                // Channel full, skip this frame
+                                // Channel full or closed
                             }
 
                             frame_count += 1;
@@ -808,15 +804,15 @@ fn start_screen_capture(
                     }
                 }
                 Err(e) => {
-                    println!("[ScreenCapture] Capture error: {}", e);
+                    eprintln!("[ScreenCapture] Capture error: {}", e);
                 }
             }
 
-            // ~60 FPS for smooth experience
-            tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
+            // ~60 FPS
+            std::thread::sleep(std::time::Duration::from_millis(16));
         }
 
-        println!("[ScreenCapture] H.264 capture loop ended");
+        crate::log_debug("info", "[ScreenCapture] H.264 capture loop ended");
     });
 
     Ok(())

@@ -3,11 +3,11 @@
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    BufferSize, Device, Host, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig,
+    BufferSize, Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig,
 };
-use std::sync::{Arc, Mutex};
-use std::collections::VecDeque;
 use dasp::sample::ToSample;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 pub struct AudioCapture {
     input_buffer: Arc<Mutex<VecDeque<i16>>>,
@@ -35,7 +35,10 @@ impl AudioCapture {
             .default_input_config()
             .map_err(|e| format!("Failed to get input config: {}", e))?;
 
-        log::info!("Audio device: {}", device.name().unwrap_or("Unknown".to_string()));
+        log::info!(
+            "Audio device: {}",
+            device.name().unwrap_or("Unknown".to_string())
+        );
         log::info!("Audio config: {:?}", config);
 
         // Normalize sample rate to 48000 or closest supported
@@ -66,28 +69,78 @@ impl AudioCapture {
         };
 
         let stream = match config.sample_format() {
-            SampleFormat::I8 => self.build_input_stream::<i8>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::I16 => self.build_input_stream::<i16>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::I32 => self.build_input_stream::<i32>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::I64 => self.build_input_stream::<i64>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::U8 => self.build_input_stream::<u8>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::U16 => self.build_input_stream::<u16>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::U32 => self.build_input_stream::<u32>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::U64 => self.build_input_stream::<u64>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::F32 => self.build_input_stream::<f32>(device, &config, stream_config, input_buffer.clone())?,
-            SampleFormat::F64 => self.build_input_stream::<f64>(device, &config, stream_config, input_buffer.clone())?,
+            SampleFormat::I8 => {
+                self.build_input_stream::<i8>(device, &config, stream_config, input_buffer.clone())?
+            }
+            SampleFormat::I16 => self.build_input_stream::<i16>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::I32 => self.build_input_stream::<i32>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::I64 => self.build_input_stream::<i64>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::U8 => {
+                self.build_input_stream::<u8>(device, &config, stream_config, input_buffer.clone())?
+            }
+            SampleFormat::U16 => self.build_input_stream::<u16>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::U32 => self.build_input_stream::<u32>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::U64 => self.build_input_stream::<u64>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::F32 => self.build_input_stream::<f32>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
+            SampleFormat::F64 => self.build_input_stream::<f64>(
+                device,
+                &config,
+                stream_config,
+                input_buffer.clone(),
+            )?,
             _ => return Err("Unsupported sample format".to_string()),
         };
 
-        stream.play().map_err(|e| format!("Failed to play stream: {}", e))?;
+        stream
+            .play()
+            .map_err(|e| format!("Failed to play stream: {}", e))?;
         log::info!("✅ Audio stream started successfully");
-        
+
         // Stream is kept alive by cpal runtime - we don't need to store it
         // The stream will continue running as long as it's not dropped
         // We leak it intentionally to keep it alive (similar to RustDesk approach)
         std::mem::forget(stream);
 
-        log::info!("✅ Audio capture initialized: {}Hz, {} channels", self.sample_rate, self.channels);
+        log::info!(
+            "✅ Audio capture initialized: {}Hz, {} channels",
+            self.sample_rate,
+            self.channels
+        );
         Ok(())
     }
 
@@ -119,7 +172,12 @@ impl AudioCapture {
                     let new_len = lock.len();
                     // Log every 1000 samples to avoid spam
                     if new_len % 1000 < buffer_len {
-                        log::debug!("[AudioCapture] Buffer: {} -> {} samples (added {})", old_len, new_len, buffer_len);
+                        log::debug!(
+                            "[AudioCapture] Buffer: {} -> {} samples (added {})",
+                            old_len,
+                            new_len,
+                            buffer_len
+                        );
                     }
                 },
                 err_fn,
@@ -135,13 +193,16 @@ impl AudioCapture {
         // Clear buffer - stream will stop when AudioCapture is dropped
         let buffer_len = self.input_buffer.lock().unwrap().len();
         self.input_buffer.lock().unwrap().clear();
-        log::info!("[AudioCapture] Audio capture stopped (cleared {} samples from buffer)", buffer_len);
+        log::info!(
+            "[AudioCapture] Audio capture stopped (cleared {} samples from buffer)",
+            buffer_len
+        );
     }
 
     pub fn read_samples(&self, count: usize) -> Vec<i16> {
         let mut buffer = self.input_buffer.lock().unwrap();
         let mut samples = Vec::with_capacity(count);
-        
+
         for _ in 0..count {
             if let Some(sample) = buffer.pop_front() {
                 samples.push(sample);
@@ -149,7 +210,7 @@ impl AudioCapture {
                 break;
             }
         }
-        
+
         samples
     }
 
@@ -166,4 +227,3 @@ impl AudioCapture {
         buffer.len() >= count
     }
 }
-

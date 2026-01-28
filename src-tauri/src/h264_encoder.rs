@@ -53,7 +53,7 @@ impl H264Encoder {
             .enable_skip_frame(false);
         
         // OpenH264 specific: real-time usage type
-        let mut encoder = Encoder::with_api_config(api, config)
+        let encoder = Encoder::with_api_config(api, config)
             .map_err(|e| format!("Failed to create encoder: {:?}", e))?;
             
         Ok(Self {
@@ -374,7 +374,7 @@ impl H264Encoder {
         }
         
         // Scan for NAL units to detect keyframe and extract SPS/PPS
-        let mut is_keyframe = false;
+        let is_keyframe;
         let mut has_sps = false;
         let mut has_pps = false;
         let mut has_idr = false;

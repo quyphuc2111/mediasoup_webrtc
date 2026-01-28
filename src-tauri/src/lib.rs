@@ -18,7 +18,7 @@ mod udp_audio;
 
 use crypto::{KeyPairInfo, VerifyResult};
 use student_agent::{AgentConfig, AgentState, AgentStatus};
-use teacher_connector::{ConnectionStatus, ConnectorState, StudentConnection};
+use teacher_connector::{ConnectorState, StudentConnection};
 
 use database::{delete_device, get_all_devices, init_database, save_device, SavedDevice};
 use lan_discovery::{discover_devices, respond_to_discovery, DiscoveredDevice};

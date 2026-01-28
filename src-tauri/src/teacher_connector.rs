@@ -155,6 +155,7 @@ pub enum ConnectionCommand {
     Disconnect,
     SendMouseInput(MouseInputEvent),
     SendKeyboardInput(KeyboardInputEvent),
+    SendTeacherMessage(TeacherMessage),
 }
 
 /// Screen frame data
@@ -374,7 +375,7 @@ async fn handle_connection(
     ip: String,
     port: u16,
     mut cmd_rx: mpsc::Receiver<ConnectionCommand>,
-    credentials: AuthCredentials,
+    _credentials: AuthCredentials,
     app_handle: Option<AppHandle>,
 ) -> Result<(), String> {
     let url = format!("ws://{}:{}", ip, port);
@@ -593,6 +594,10 @@ async fn handle_connection(
                         let _ = write.send(Message::Text(json)).await;
                         state.update_status(&id, ConnectionStatus::Connected);
                     }
+                    Some(ConnectionCommand::SendTeacherMessage(msg)) => {
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
                     Some(ConnectionCommand::SendMouseInput(event)) => {
                         // Batch mouse move events for better performance
                         // Collect up to 10 move events or wait max 16ms
@@ -663,6 +668,10 @@ async fn handle_connection(
                                         let json = serde_json::to_string(&msg).unwrap();
                                         let _ = write.send(Message::Text(json)).await;
                                         state.update_status(&id, ConnectionStatus::Connected);
+                                    }
+                                    ConnectionCommand::SendTeacherMessage(msg) => {
+                                        let json = serde_json::to_string(&msg).unwrap();
+                                        let _ = write.send(Message::Text(json)).await;
                                     }
                                     ConnectionCommand::SendKeyboardInput(event) => {
                                         let msg = TeacherMessage::KeyboardInput { event };
