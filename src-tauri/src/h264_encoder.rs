@@ -75,8 +75,8 @@ impl H264Encoder {
             let api = OpenH264API::from_source();
             let config = EncoderConfig::new()
                 .max_frame_rate(60.0)
-                .set_bitrate_bps(5_000_000)
-                .enable_skip_frame(false);
+                .set_bitrate_bps(4_000_000)
+                .enable_skip_frame(true);
             
             let encoder = Encoder::with_api_config(api, config)
                 .map_err(|e| format!("Failed to recreate encoder: {:?}", e))?;
@@ -494,11 +494,10 @@ fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     y_plane.par_chunks_mut(width).enumerate().for_each(|(y, y_row)| {
         let rgba_row = &rgba[y * width * 4 .. (y + 1) * width * 4];
         for x in 0..width {
-            // xcap returns BGRA on most platforms. 
-            // Index 0: Blue, Index 1: Green, Index 2: Red
-            let b = rgba_row[x * 4] as i32;
+            // xcap returns RgbaImage, so Byte 0 is Red, Byte 2 is Blue
+            let r = rgba_row[x * 4] as i32;
             let g = rgba_row[x * 4 + 1] as i32;
-            let r = rgba_row[x * 4 + 2] as i32;
+            let b = rgba_row[x * 4 + 2] as i32;
             
             let y_val = (RY * r + GY * g + BY * b + 128) >> 8;
             y_row[x] = y_val.clamp(16, 235) as u8;
@@ -528,9 +527,9 @@ fn rgba_to_yuv420(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
                     let row_off = y * width * 4;
                     for x in [x1, x2] {
                         let off = row_off + x * 4;
-                        b_sum += rgba[off] as i32;
+                        r_sum += rgba[off] as i32;
                         g_sum += rgba[off + 1] as i32;
-                        r_sum += rgba[off + 2] as i32;
+                        b_sum += rgba[off + 2] as i32;
                     }
                 }
                 

@@ -16,6 +16,17 @@ interface H264VideoPlayerProps {
   frame?: ScreenFrame | null;
   className?: string;
   connectionId?: string;
+  onStats?: (stats: PlayerStats) => void;
+}
+
+export interface PlayerStats {
+  fps: number;
+  width: number;
+  height: number;
+  codec: string;
+  bitrateMbps: number;
+  errorCount: number;
+  decoder: string;
 }
 
 // Check if WebCodecs is supported
@@ -38,17 +49,23 @@ function arrayToUint8Array(arr: number[]): Uint8Array {
   return new Uint8Array(arr);
 }
 
-export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPlayerProps) {
+export function H264VideoPlayer({ frame, className, connectionId, onStats }: H264VideoPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [decodedFrameCount, setDecodedFrameCount] = useState(0);
   const [useFallback, setUseFallback] = useState(false);
   const lastKeyframeRef = useRef<Uint8Array | null>(null);
   const pendingFramesRef = useRef<ScreenFrame[]>([]);
   const errorCountRef = useRef(0);
   const lastProcessedTimestampRef = useRef<number>(-1);
+
+  // Stats refs
+  const frameCountRef = useRef(0);
+  const byteCountRef = useRef(0);
+  const lastStatsTimeRef = useRef(performance.now());
+  const currentCodecRef = useRef('avc1.42E01f');
+  const currentResolutionRef = useRef({ width: 0, height: 0 });
 
   // Initialize decoder
   const initDecoder = useCallback((width: number, height: number, description?: Uint8Array) => {
@@ -87,7 +104,7 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
 
                 // Draw frame
                 ctx.drawImage(videoFrame, 0, 0);
-                setDecodedFrameCount(prev => prev + 1);
+                // setDecodedFrameCount(prev => prev + 1); // Replaced by frameCountRef for stats
                 errorCountRef.current = 0; // Reset error count on success
               }
             }
@@ -129,6 +146,7 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
         const level = description[3].toString(16).padStart(2, '0').toUpperCase();
         codecStr = `avc1.${profile}${compat}${level}`;
         console.log(`[H264Player] Detected codec from SPS: ${codecStr}`);
+        currentCodecRef.current = codecStr;
       }
 
       const config: VideoDecoderConfig = {
@@ -138,6 +156,9 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
         optimizeForLatency: true,
         hardwareAcceleration: 'prefer-hardware',
       };
+
+      // Update current resolution for stats
+      currentResolutionRef.current = { width, height };
 
       // NOTE: We do NOT pass description to configure() because our stream is Annex B (start codes).
       // If we pass description (AVCC), WebCodecs expects length-prefixed NALUs.
@@ -160,7 +181,7 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
       setError(`Init failed: ${e?.message || e}`);
       return false;
     }
-  }, []);
+  }, [connectionId]);
 
   // Decode a frame
   const decodeFrame = useCallback((frameData: ScreenFrame) => {
@@ -248,6 +269,33 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
       });
 
       decoder.decode(chunk);
+
+      // Update stats
+      frameCountRef.current++;
+      byteCountRef.current += h264Data.byteLength;
+
+      const now = performance.now();
+      if (now - lastStatsTimeRef.current >= 1000) {
+        const elapsed = (now - lastStatsTimeRef.current) / 1000;
+        const fps = Math.round(frameCountRef.current / elapsed);
+        const bitrate = (byteCountRef.current * 8) / (1024 * 1024) / elapsed; // Mbps
+
+        if (onStats) {
+          onStats({
+            fps,
+            width: currentResolutionRef.current.width,
+            height: currentResolutionRef.current.height,
+            codec: currentCodecRef.current,
+            bitrateMbps: parseFloat(bitrate.toFixed(2)),
+            errorCount: errorCountRef.current,
+            decoder: 'Hardware (WebCodecs)',
+          });
+        }
+
+        frameCountRef.current = 0;
+        byteCountRef.current = 0;
+        lastStatsTimeRef.current = now;
+      }
 
       // Mark this timestamp as processed
       lastProcessedTimestampRef.current = frameData.timestamp;
@@ -404,7 +452,7 @@ export function H264VideoPlayer({ frame, className, connectionId }: H264VideoPla
         padding: '2px 6px',
         borderRadius: '4px',
       }}>
-        H.264 | {decodedFrameCount} frames
+        H.264
       </div>
     </div>
   );

@@ -739,6 +739,8 @@ fn start_screen_capture(
         let mut frame_count: u64 = 0;
 
         while !stop_flag.load(Ordering::Relaxed) {
+            let loop_start = std::time::Instant::now();
+
             // Check for keyframe request
             if let Ok(_) = keyframe_rx.try_recv() {
                 encoder.request_keyframe();
@@ -808,8 +810,11 @@ fn start_screen_capture(
                 }
             }
 
-            // ~60 FPS
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            // Adaptive sleep for ~60 FPS (16.6 ms per frame)
+            let elapsed = loop_start.elapsed();
+            if elapsed < std::time::Duration::from_micros(16666) {
+                std::thread::sleep(std::time::Duration::from_micros(16666) - elapsed);
+            }
         }
 
         crate::log_debug("info", "[ScreenCapture] H.264 capture loop ended");
@@ -944,48 +949,13 @@ fn handle_keyboard_input(event: &KeyboardInputEvent) -> Result<(), String> {
         _ => return Ok(()),
     };
 
-    // Handle modifiers
-    if event.modifiers.ctrl {
-        enigo
-            .key(Key::Control, Direction::Press)
-            .map_err(|e| format!("Failed to press Ctrl: {}", e))?;
-    }
-    if event.modifiers.alt {
-        enigo
-            .key(Key::Alt, Direction::Press)
-            .map_err(|e| format!("Failed to press Alt: {}", e))?;
-    }
-    if event.modifiers.shift {
-        enigo
-            .key(Key::Shift, Direction::Press)
-            .map_err(|e| format!("Failed to press Shift: {}", e))?;
-    }
-    if event.modifiers.meta {
-        enigo
-            .key(Key::Meta, Direction::Press)
-            .map_err(|e| format!("Failed to press Meta: {}", e))?;
-    }
-
     // Press/release the key
+    // NOTE: We do not manually handle modifiers here because the frontend sends explicit
+    // keydown/keyup events for Shift, Control, Alt, etc.
+    // Manually managing them here causes double-presses or premature releases.
     enigo
         .key(key, direction)
         .map_err(|e| format!("Failed to handle key: {}", e))?;
-
-    // Release modifiers on keyup
-    if event.event_type == "keyup" {
-        if event.modifiers.meta {
-            let _ = enigo.key(Key::Meta, Direction::Release);
-        }
-        if event.modifiers.shift {
-            let _ = enigo.key(Key::Shift, Direction::Release);
-        }
-        if event.modifiers.alt {
-            let _ = enigo.key(Key::Alt, Direction::Release);
-        }
-        if event.modifiers.ctrl {
-            let _ = enigo.key(Key::Control, Direction::Release);
-        }
-    }
 
     Ok(())
 }
@@ -1101,6 +1071,30 @@ fn code_to_key(code: &str, key: &str) -> Key {
         "NumpadDecimal" => Key::Unicode('.'),
         "NumpadDivide" => Key::Unicode('/'),
         "NumpadEnter" => Key::Return,
+
+        // Special Keys
+        "Space" => Key::Space,
+        "Backspace" => Key::Backspace,
+        "Tab" => Key::Tab,
+        "Enter" => Key::Return,
+        "Escape" => Key::Escape,
+        "ShiftLeft" | "ShiftRight" => Key::Shift,
+        "ControlLeft" | "ControlRight" => Key::Control,
+        "AltLeft" | "AltRight" => Key::Alt,
+        "MetaLeft" | "MetaRight" => Key::Meta,
+        "CapsLock" => Key::CapsLock,
+
+        // Navigation
+        "ArrowUp" => Key::UpArrow,
+        "ArrowDown" => Key::DownArrow,
+        "ArrowLeft" => Key::LeftArrow,
+        "ArrowRight" => Key::RightArrow,
+        "Home" => Key::Home,
+        "End" => Key::End,
+        "PageUp" => Key::PageUp,
+        "PageDown" => Key::PageDown,
+        "Insert" => Key::Unicode('d'), // Fallback or ignore
+        "Delete" => Key::Delete,
 
         // Default: try to use the key character
         _ => {
