@@ -136,6 +136,9 @@ pub enum TeacherMessage {
     #[serde(rename = "mouse_input")]
     MouseInput { event: MouseInputEvent },
 
+    #[serde(rename = "mouse_input_batch")]
+    MouseInputBatch { events: Vec<MouseInputEvent> },
+
     #[serde(rename = "keyboard_input")]
     KeyboardInput { event: KeyboardInputEvent },
 }
@@ -284,8 +287,8 @@ pub async fn connect_to_student_with_auth(
         conns.insert(id.clone(), connection);
     }
 
-    // Create command channel
-    let (cmd_tx, cmd_rx) = mpsc::channel::<ConnectionCommand>(16);
+    // Create command channel with larger buffer for mouse events (100 events)
+    let (cmd_tx, cmd_rx) = mpsc::channel::<ConnectionCommand>(100);
     {
         let mut senders = state.command_senders.lock().map_err(|e| e.to_string())?;
         senders.insert(id.clone(), cmd_tx);
@@ -327,8 +330,8 @@ pub async fn handle_connection_async(
         ip, port
     );
 
-    // Create command channel internally
-    let (cmd_tx, cmd_rx) = mpsc::channel::<ConnectionCommand>(16);
+    // Create command channel internally with larger buffer for mouse events (100 events)
+    let (cmd_tx, cmd_rx) = mpsc::channel::<ConnectionCommand>(100);
     {
         let mut senders = state.command_senders.lock().map_err(|e| e.to_string())?;
         senders.insert(id.clone(), cmd_tx);
@@ -585,7 +588,7 @@ async fn handle_connection(
                 }
             }
 
-            // Handle commands from app
+            // Handle commands from app with batching for mouse move events
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(ConnectionCommand::RequestScreen) => {
@@ -601,9 +604,95 @@ async fn handle_connection(
                         state.update_status(&id, ConnectionStatus::Connected);
                     }
                     Some(ConnectionCommand::SendMouseInput(event)) => {
-                        let msg = TeacherMessage::MouseInput { event };
-                        let json = serde_json::to_string(&msg).unwrap();
-                        let _ = write.send(Message::Text(json)).await;
+                        // Batch mouse move events for better performance
+                        // Collect up to 10 move events or wait max 16ms
+                        const BATCH_TIMEOUT_MS: u64 = 16; // ~60fps
+                        const MAX_BATCH_SIZE: usize = 10;
+
+                        // Only batch move events, send others immediately
+                        if event.event_type == "move" {
+                            let mut events = vec![event];
+                            let start = std::time::Instant::now();
+                            let mut pending_non_move: Option<MouseInputEvent> = None;
+                            let mut pending_other_cmd: Option<ConnectionCommand> = None;
+                            
+                            while events.len() < MAX_BATCH_SIZE && start.elapsed().as_millis() < BATCH_TIMEOUT_MS as u128 {
+                                let remaining_time = BATCH_TIMEOUT_MS.saturating_sub(start.elapsed().as_millis() as u64);
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_millis(remaining_time.max(1)),
+                                    cmd_rx.recv()
+                                ).await {
+                                    Ok(Some(ConnectionCommand::SendMouseInput(next_event))) => {
+                                        if next_event.event_type == "move" {
+                                            events.push(next_event);
+                                        } else {
+                                            // Non-move event, save it and break
+                                            pending_non_move = Some(next_event);
+                                            break;
+                                        }
+                                    }
+                                    Ok(Some(other_cmd)) => {
+                                        // Other command, save it and break
+                                        pending_other_cmd = Some(other_cmd);
+                                        break;
+                                    }
+                                    Ok(None) => break,
+                                    Err(_) => break,
+                                }
+                            }
+
+                            // Send batched events
+                            if events.len() > 1 {
+                                let msg = TeacherMessage::MouseInputBatch { events };
+                                let json = serde_json::to_string(&msg).unwrap();
+                                let _ = write.send(Message::Text(json)).await;
+                            } else if !events.is_empty() {
+                                let msg = TeacherMessage::MouseInput { event: events.remove(0) };
+                                let json = serde_json::to_string(&msg).unwrap();
+                                let _ = write.send(Message::Text(json)).await;
+                            }
+
+                            // Handle pending non-move event
+                            if let Some(non_move_event) = pending_non_move {
+                                let msg = TeacherMessage::MouseInput { event: non_move_event };
+                                let json = serde_json::to_string(&msg).unwrap();
+                                let _ = write.send(Message::Text(json)).await;
+                            }
+
+                            // Handle pending other command
+                            if let Some(other_cmd) = pending_other_cmd {
+                                match other_cmd {
+                                    ConnectionCommand::RequestScreen => {
+                                        let msg = TeacherMessage::RequestScreen;
+                                        let json = serde_json::to_string(&msg).unwrap();
+                                        let _ = write.send(Message::Text(json)).await;
+                                        state.update_status(&id, ConnectionStatus::Viewing);
+                                    }
+                                    ConnectionCommand::StopScreen => {
+                                        let msg = TeacherMessage::StopScreen;
+                                        let json = serde_json::to_string(&msg).unwrap();
+                                        let _ = write.send(Message::Text(json)).await;
+                                        state.update_status(&id, ConnectionStatus::Connected);
+                                    }
+                                    ConnectionCommand::SendKeyboardInput(event) => {
+                                        let msg = TeacherMessage::KeyboardInput { event };
+                                        let json = serde_json::to_string(&msg).unwrap();
+                                        let _ = write.send(Message::Text(json)).await;
+                                    }
+                                    ConnectionCommand::Disconnect => {
+                                        log::info!("[TeacherConnector] Disconnect command received");
+                                        let _ = write.close().await;
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            // Non-move event, send immediately
+                            let msg = TeacherMessage::MouseInput { event };
+                            let json = serde_json::to_string(&msg).unwrap();
+                            let _ = write.send(Message::Text(json)).await;
+                        }
                     }
                     Some(ConnectionCommand::SendKeyboardInput(event)) => {
                         let msg = TeacherMessage::KeyboardInput { event };

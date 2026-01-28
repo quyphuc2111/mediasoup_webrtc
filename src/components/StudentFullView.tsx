@@ -75,11 +75,26 @@ export function StudentFullView({
   const [isRemoteControlActive, setIsRemoteControlActive] = useState(remoteControlEnabled);
   const screenContainerRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
+  
+  // Throttling for mouse move events to reduce network traffic and improve responsiveness
+  const lastMouseMoveTimeRef = useRef<number>(0);
+  const pendingMouseMoveRef = useRef<{ x: number; y: number } | null>(null);
+  const mouseMoveTimeoutRef = useRef<number | null>(null);
+  const MOUSE_MOVE_THROTTLE_MS = 16; // ~60fps for smooth movement
 
   // Update local state when prop changes
   useEffect(() => {
     setIsRemoteControlActive(remoteControlEnabled);
   }, [remoteControlEnabled]);
+  
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (mouseMoveTimeoutRef.current !== null) {
+        clearTimeout(mouseMoveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Focus keyboard input when remote control is active
   useEffect(() => {
@@ -157,15 +172,52 @@ export function StudentFullView({
     }
   }, [isRemoteControlActive, student.id]);
 
-  // Mouse event handlers
+  // Throttled mouse move handler - only sends events at a controlled rate
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = getNormalizedPosition(e);
-    if (pos) {
+    if (!pos) return;
+    
+    const now = Date.now();
+    const timeSinceLastMove = now - lastMouseMoveTimeRef.current;
+    
+    // Store the latest position
+    pendingMouseMoveRef.current = pos;
+    
+    // If enough time has passed, send immediately
+    if (timeSinceLastMove >= MOUSE_MOVE_THROTTLE_MS) {
+      lastMouseMoveTimeRef.current = now;
+      pendingMouseMoveRef.current = null;
+      
+      // Clear any pending timeout
+      if (mouseMoveTimeoutRef.current !== null) {
+        clearTimeout(mouseMoveTimeoutRef.current);
+        mouseMoveTimeoutRef.current = null;
+      }
+      
       sendMouseEvent({
         event_type: 'move',
         x: pos.x,
         y: pos.y,
       });
+    } else {
+      // Schedule a delayed send if not already scheduled
+      if (mouseMoveTimeoutRef.current === null) {
+        const delay = MOUSE_MOVE_THROTTLE_MS - timeSinceLastMove;
+        mouseMoveTimeoutRef.current = window.setTimeout(() => {
+          const pending = pendingMouseMoveRef.current;
+          if (pending) {
+            lastMouseMoveTimeRef.current = Date.now();
+            pendingMouseMoveRef.current = null;
+            mouseMoveTimeoutRef.current = null;
+            
+            sendMouseEvent({
+              event_type: 'move',
+              x: pending.x,
+              y: pending.y,
+            });
+          }
+        }, delay);
+      }
     }
   }, [getNormalizedPosition, sendMouseEvent]);
 
@@ -173,6 +225,13 @@ export function StudentFullView({
     e.preventDefault();
     const pos = getNormalizedPosition(e);
     if (pos) {
+      // Clear any pending mouse move to ensure click position is accurate
+      if (mouseMoveTimeoutRef.current !== null) {
+        clearTimeout(mouseMoveTimeoutRef.current);
+        mouseMoveTimeoutRef.current = null;
+      }
+      pendingMouseMoveRef.current = null;
+      
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
       sendMouseEvent({
         event_type: 'down',
@@ -189,6 +248,13 @@ export function StudentFullView({
     e.preventDefault();
     const pos = getNormalizedPosition(e);
     if (pos) {
+      // Clear any pending mouse move to ensure click position is accurate
+      if (mouseMoveTimeoutRef.current !== null) {
+        clearTimeout(mouseMoveTimeoutRef.current);
+        mouseMoveTimeoutRef.current = null;
+      }
+      pendingMouseMoveRef.current = null;
+      
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
       sendMouseEvent({
         event_type: 'up',
@@ -203,6 +269,13 @@ export function StudentFullView({
     e.preventDefault();
     const pos = getNormalizedPosition(e);
     if (pos) {
+      // Clear any pending mouse move to ensure click position is accurate
+      if (mouseMoveTimeoutRef.current !== null) {
+        clearTimeout(mouseMoveTimeoutRef.current);
+        mouseMoveTimeoutRef.current = null;
+      }
+      pendingMouseMoveRef.current = null;
+      
       const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle';
       sendMouseEvent({
         event_type: 'click',
@@ -219,6 +292,13 @@ export function StudentFullView({
       // Send right click
       const pos = getNormalizedPosition(e);
       if (pos) {
+        // Clear any pending mouse move to ensure click position is accurate
+        if (mouseMoveTimeoutRef.current !== null) {
+          clearTimeout(mouseMoveTimeoutRef.current);
+          mouseMoveTimeoutRef.current = null;
+        }
+        pendingMouseMoveRef.current = null;
+        
         sendMouseEvent({
           event_type: 'click',
           x: pos.x,

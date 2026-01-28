@@ -112,6 +112,9 @@ pub enum TeacherMessage {
     #[serde(rename = "mouse_input")]
     MouseInput { event: MouseInputEvent },
 
+    #[serde(rename = "mouse_input_batch")]
+    MouseInputBatch { events: Vec<MouseInputEvent> },
+
     #[serde(rename = "keyboard_input")]
     KeyboardInput { event: KeyboardInputEvent },
 }
@@ -574,6 +577,26 @@ where
             // Handle mouse input
             if let Err(e) = handle_mouse_input(&event) {
                 log::warn!("[StudentAgent] Failed to handle mouse input: {}", e);
+            }
+        }
+
+        TeacherMessage::MouseInputBatch { events } => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            // Handle batched mouse inputs - process all but only apply the last move event
+            // This reduces latency by skipping intermediate positions
+            for event in events.iter() {
+                if let Err(e) = handle_mouse_input(event) {
+                    log::warn!("[StudentAgent] Failed to handle mouse input: {}", e);
+                }
             }
         }
 
