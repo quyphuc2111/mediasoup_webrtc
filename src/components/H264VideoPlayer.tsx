@@ -147,8 +147,8 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
 
       const config: VideoDecoderConfig = {
         codec: codecStr,
-        codedWidth: width,
-        codedHeight: height,
+        codedWidth: Math.ceil(width / 16) * 16, // Align to 16 (macroblock size)
+        codedHeight: Math.ceil(height / 16) * 16, // Align to 16
         // CRITICAL: Set description for AVCC format (ISO 14496-15)
         // When description is set, decoder expects length-prefixed bitstream, not Annex-B
         ...(hasDescription && description ? { description } : {}),
@@ -159,9 +159,10 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       // Track if we're using AVCC format (will need to convert Annex-B → AVCC)
       usingDescriptionRef.current = hasDescription;
 
-      console.log(`[H264Player] Decoder config:`, {
+      console.log(`[H264Player] Decoder config attempt:`, {
         codec: codecStr,
-        size: `${width}x${height}`,
+        originalSize: `${width}x${height}`,
+        codedSize: `${config.codedWidth}x${config.codedHeight}`,
         hasDescription,
         hardwareAcceleration: config.hardwareAcceleration,
         optimizeForLatency: config.optimizeForLatency,
@@ -169,41 +170,46 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
 
       // Check support proactively and adjust config as needed
       try {
-        const support = await VideoDecoder.isConfigSupported(config);
+        let support = await VideoDecoder.isConfigSupported(config);
+
+        // 1. If strict config not supported, try software
         if (!support.supported) {
           console.warn(`[H264Player] Hardware config not supported (${config.codec}), switching to software.`);
           config.hardwareAcceleration = 'prefer-software';
-          // If we switched to software, verify support again
-          const supportSoft = await VideoDecoder.isConfigSupported(config);
-          if (!supportSoft.supported) {
-            // Try disabling optimization
-            config.optimizeForLatency = false;
-            console.warn(`[H264Player] Software config not supported, disabling low-latency.`);
-          }
-          // Persist fallback
+          support = await VideoDecoder.isConfigSupported(config);
+        }
+
+        // 2. If software not supported, try disabling low-latency
+        if (!support.supported) {
+          config.optimizeForLatency = false;
+          console.warn(`[H264Player] Software config not supported, disabling low-latency.`);
+          support = await VideoDecoder.isConfigSupported(config);
+        }
+
+        // 3. Fallback: If specific codec string fails (e.g. avc1.42C02A), try standard Baseline (avc1.42E01f)
+        // Many decoders tolerate mismatched codec strings if the description/bitstream is valid
+        if (!support.supported && codecStr !== 'avc1.42E01f') {
+          console.warn(`[H264Player] Codec ${codecStr} not supported, trying fallback 'avc1.42E01f'`);
+          config.codec = 'avc1.42E01f';
+          support = await VideoDecoder.isConfigSupported(config);
+        }
+
+        // Persistent fallback
+        if (config.hardwareAcceleration === 'prefer-software') {
           setForceSoftware(true);
         }
+
+        // FINAL CHECK
+        if (!support.supported) {
+          // Instead of failing, we WARN and PROCEED. 
+          // Windows sometimes reports false negatives for isConfigSupported but configure() works.
+          console.warn('[H264Player] Configuration reported as NOT supported, but will attempt configure() anyway:', config);
+        } else {
+          console.log('[H264Player] Configuration verified as supported:', config);
+        }
+
       } catch (checkErr) {
         console.warn("[H264Player] isConfigSupported check failed:", checkErr);
-      }
-
-      // FINAL VERIFICATION: Ensure the final configuration is actually supported
-      try {
-        const finalSupport = await VideoDecoder.isConfigSupported(config);
-        if (!finalSupport.supported) {
-          console.error('[H264Player] Final configuration not supported:', {
-            codec: config.codec,
-            hardwareAcceleration: config.hardwareAcceleration,
-            optimizeForLatency: config.optimizeForLatency,
-          });
-          setError(`Configuration not supported: ${config.codec}`);
-          return false;
-        }
-        console.log('[H264Player] Configuration verified as supported:', config);
-      } catch (verifyErr) {
-        console.error('[H264Player] Final config verification failed:', verifyErr);
-        setError('Cannot verify decoder configuration support');
-        return false;
       }
 
       // Create Decoder

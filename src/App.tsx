@@ -41,45 +41,45 @@ function App() {
             <h1>Smartlab</h1>
             <p className="subtitle">Chọn chức năng bạn muốn sử dụng</p>
 
-            <div className="page-grid">
-              {/* Teacher Features */}
-              <button
-                onClick={() => navigateTo('screen-sharing')}
-                className="btn page-card"
-              >
-                <span className="page-icon">🖥️</span>
-                <span className="page-title">Screen Sharing</span>
-                <span className="page-desc">Chia sẻ màn hình cho lớp học</span>
-              </button>
+            {/* Teaching Features Section */}
+            <div className="feature-section">
+              <h2 className="section-title">Chức năng giảng bài</h2>
+              <div className="section-divider"></div>
+              <div className="page-grid">
+                <button
+                  onClick={() => navigateTo('screen-sharing')}
+                  className="btn page-card"
+                >
+                  <span className="page-icon">🖥️</span>
+                  <span className="page-title">Screen Sharing</span>
+                  <span className="page-desc">Chia sẻ màn hình cho lớp học</span>
+                </button>
+              </div>
+            </div>
 
-              <button
-                onClick={() => navigateTo('view-client')}
-                className="btn page-card"
-              >
-                <span className="page-icon">👁️</span>
-                <span className="page-title">View Client</span>
-                <span className="page-desc">Xem màn hình học sinh</span>
-              </button>
+            {/* Monitoring & Control Features Section */}
+            <div className="feature-section">
+              <h2 className="section-title">Xem và điều khiển màn hình</h2>
+              <div className="section-divider"></div>
+              <div className="page-grid">
+                <button
+                  onClick={() => navigateTo('view-client')}
+                  className="btn page-card"
+                >
+                  <span className="page-icon">👁️</span>
+                  <span className="page-title">View Client</span>
+                  <span className="page-desc">Xem màn hình học sinh</span>
+                </button>
 
-              {/* Student Features */}
-              <button
-                onClick={() => navigateTo('student-agent')}
-                className="btn page-card student"
-              >
-                <span className="page-icon">🎓</span>
-                <span className="page-title">Student Agent</span>
-                <span className="page-desc">Cho phép giáo viên xem màn hình</span>
-              </button>
-
-              {/* Settings */}
-              <button
-                onClick={() => navigateTo('auth-settings')}
-                className="btn page-card settings"
-              >
-                <span className="page-icon">⚙️</span>
-                <span className="page-title">Authentication</span>
-                <span className="page-desc">Cấu hình Ed25519/LDAP</span>
-              </button>
+                <button
+                  onClick={() => navigateTo('student-agent')}
+                  className="btn page-card student"
+                >
+                  <span className="page-icon">🎓</span>
+                  <span className="page-title">Student Agent</span>
+                  <span className="page-desc">Cho phép giáo viên xem màn hình</span>
+                </button>
+              </div>
             </div>
           </main>
         );

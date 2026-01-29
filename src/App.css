@@ -709,12 +709,35 @@ h1 {
   color: var(--text-secondary);
 }
 
+/* Feature Sections */
+.feature-section {
+  margin-bottom: 3rem;
+}
+
+.feature-section:last-child {
+  margin-bottom: 0;
+}
+
+.section-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 1rem 0;
+  text-align: left;
+}
+
+.section-divider {
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary) 0%, transparent 100%);
+  margin-bottom: 1.5rem;
+  border-radius: 2px;
+}
+
 /* Page Grid - Home Page */
 .page-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1.5rem;
-  margin-top: 2rem;
 }
 
 .page-card {
@@ -932,8 +955,13 @@ h1 {
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .thumbnail-info {
@@ -1582,8 +1610,13 @@ h1 {
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Full view screen styling */
@@ -1725,9 +1758,12 @@ h1 {
 }
 
 @keyframes pulse-glow {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: 0 0 5px rgba(59, 130, 246, 0.3);
   }
+
   50% {
     box-shadow: 0 0 15px rgba(59, 130, 246, 0.6);
   }
@@ -1742,9 +1778,12 @@ h1 {
 }
 
 @keyframes pulse {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.5;
   }
