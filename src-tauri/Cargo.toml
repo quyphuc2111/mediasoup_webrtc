@@ -21,9 +21,9 @@ name = "screensharing-webrtc-mediasoup"
 path = "src/main.rs"
 
 # Student binary (no server management)
-[[bin]]
-name = "screensharing-webrtc-mediasoup-student"
-path = "src/main_student.rs"
+# [[bin]]
+# name = "screensharing-webrtc-mediasoup-student"
+# path = "src/main_student.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
