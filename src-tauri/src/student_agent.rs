@@ -370,6 +370,83 @@ async fn handle_connection(
     log::info!("[StudentAgent] Connection handler finished for: {}", addr);
 }
 
+/// Helper to perform Windows shutdown/restart using Win32 API
+#[cfg(target_os = "windows")]
+fn windows_shutdown(restart: bool) -> Result<(), String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, BOOL, HANDLE, LUID};
+    use windows::Win32::Security::{
+        AdjustTokenPrivileges, LookupPrivilegeValueW, OpenProcessToken, LUID_AND_ATTRIBUTES,
+        SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows::Win32::System::Shutdown::{
+        InitiateSystemShutdownExW, SHTDN_REASON_FLAG_PLANNED, SHTDN_REASON_MAJOR_OTHER,
+        SHTDN_REASON_MINOR_OTHER,
+    };
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        )
+        .is_err()
+        {
+            return Err("Failed to open process token".to_string());
+        }
+
+        let mut luid = LUID::default();
+        let name_str = "SeShutdownPrivilege";
+        let mut name_wide: Vec<u16> = name_str.encode_utf16().chain(std::iter::once(0)).collect();
+
+        if LookupPrivilegeValueW(
+            PCWSTR::null(),
+            PCWSTR::from_raw(name_wide.as_ptr()),
+            &mut luid,
+        )
+        .is_err()
+        {
+            let _ = CloseHandle(token);
+            return Err("Failed to lookup privilege".to_string());
+        }
+
+        let mut tp = TOKEN_PRIVILEGES {
+            PrivilegeCount: 1,
+            ..Default::default()
+        };
+        tp.Privileges[0] = LUID_AND_ATTRIBUTES {
+            Luid: luid,
+            Attributes: SE_PRIVILEGE_ENABLED,
+        };
+
+        if AdjustTokenPrivileges(token, BOOL::from(false), Some(&tp), 0, None, None).is_err() {
+            let _ = CloseHandle(token);
+            return Err("Failed to adjust token privileges".to_string());
+        }
+
+        let _ = CloseHandle(token);
+
+        let reason =
+            SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED;
+
+        if InitiateSystemShutdownExW(
+            PCWSTR::null(),
+            PCWSTR::null(),
+            0,
+            true, // Force apps closed
+            restart,
+            reason,
+        )
+        .is_err()
+        {
+            return Err("Windows API Shutdown failed".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Handle a single message from teacher with screen capture support
 async fn handle_message_with_capture<S>(
     text: &str,
@@ -669,10 +746,7 @@ where
             // Execute shutdown command based on OS
             #[cfg(target_os = "windows")]
             {
-                std::process::Command::new("shutdown")
-                    .args(["/s", "/t", "0"])
-                    .spawn()
-                    .map_err(|e| format!("Failed to execute shutdown: {}", e))?;
+                windows_shutdown(false)?;
             }
 
             #[cfg(not(target_os = "windows"))]
@@ -700,10 +774,7 @@ where
             // Execute restart command based on OS
             #[cfg(target_os = "windows")]
             {
-                std::process::Command::new("shutdown")
-                    .args(["/r", "/t", "0"])
-                    .spawn()
-                    .map_err(|e| format!("Failed to execute restart: {}", e))?;
+                windows_shutdown(true)?;
             }
 
             #[cfg(not(target_os = "windows"))]
