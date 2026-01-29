@@ -844,13 +844,26 @@ where
 
 /// Handle mouse input event from teacher
 fn handle_mouse_input(event: &MouseInputEvent) -> Result<(), String> {
-    // Get screen resolution for coordinate conversion
-    let (screen_width, screen_height) =
-        screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
+    // Get all monitors
+    let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
 
-    // Convert normalized coordinates to screen coordinates
-    let x = (event.x * screen_width as f64) as i32;
-    let y = (event.y * screen_height as f64) as i32;
+    // Find the primary monitor (same logic as screen capture)
+    // precise match ensures we control the screen we are viewing
+    let monitor = monitors
+        .iter()
+        .find(|m| m.is_primary())
+        .or_else(|| monitors.first())
+        .ok_or_else(|| "No monitors found".to_string())?;
+
+    let screen_width = monitor.width() as f64;
+    let screen_height = monitor.height() as f64;
+    let offset_x = monitor.x();
+    let offset_y = monitor.y();
+
+    // Convert normalized coordinates to absolute screen coordinates
+    // We must add the monitor's offset (virtual desktop position)
+    let x = offset_x + (event.x * screen_width) as i32;
+    let y = offset_y + (event.y * screen_height) as i32;
 
     // Create Enigo instance
     let mut enigo =
