@@ -49,6 +49,52 @@ function arrayToUint8Array(arr: number[]): Uint8Array {
   return new Uint8Array(arr);
 }
 
+// Convert Annex-B (start codes) to AVCC (length-prefixed) format
+// This is required when using config.description (avcC format)
+function annexBToAvcc(annexB: Uint8Array): Uint8Array {
+  const nals: Uint8Array[] = [];
+  let i = 0;
+
+  const isStartCode3 = (d: Uint8Array, p: number) =>
+    p + 3 <= d.length && d[p] === 0 && d[p + 1] === 0 && d[p + 2] === 1;
+  const isStartCode4 = (d: Uint8Array, p: number) =>
+    p + 4 <= d.length && d[p] === 0 && d[p + 1] === 0 && d[p + 2] === 0 && d[p + 3] === 1;
+
+  // Find first start code
+  while (i < annexB.length && !isStartCode3(annexB, i) && !isStartCode4(annexB, i)) i++;
+
+  while (i < annexB.length) {
+    const scSize = isStartCode4(annexB, i) ? 4 : 3;
+    i += scSize;
+    const nalStart = i;
+
+    // Find next start code
+    while (i < annexB.length && !isStartCode3(annexB, i) && !isStartCode4(annexB, i)) i++;
+    const nalEnd = i;
+
+    if (nalEnd > nalStart) nals.push(annexB.subarray(nalStart, nalEnd));
+  }
+
+  // Calculate total size (4 bytes length + NAL data for each NAL)
+  let total = 0;
+  for (const nal of nals) total += 4 + nal.length;
+
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const nal of nals) {
+    const len = nal.length;
+    // Write 4-byte length prefix (big-endian)
+    out[o++] = (len >>> 24) & 0xff;
+    out[o++] = (len >>> 16) & 0xff;
+    out[o++] = (len >>> 8) & 0xff;
+    out[o++] = len & 0xff;
+    // Write NAL data
+    out.set(nal, o);
+    o += len;
+  }
+  return out;
+}
+
 export function H264VideoPlayer({ frame, className, connectionId, onStats }: H264VideoPlayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const decoderRef = useRef<VideoDecoder | null>(null);
@@ -61,6 +107,7 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
   const errorCountRef = useRef(0);
   const lastProcessedTimestampRef = useRef<number>(-1);
   const isInitializingRef = useRef(false);
+  const usingDescriptionRef = useRef(false); // Track if decoder is using AVCC format (description set)
 
   // Stats refs
   const frameCountRef = useRef(0);
@@ -85,23 +132,42 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
         decoderRef.current.close();
       }
 
-      // Prepare config
+      // Prepare config with description (AVCC format)
       let codecStr = 'avc1.42E01f'; // Default Baseline
+      let hasDescription = false;
+
       if (description && description.length >= 4) {
         const profile = description[1].toString(16).padStart(2, '0').toUpperCase();
         const compat = description[2].toString(16).padStart(2, '0').toUpperCase();
         const level = description[3].toString(16).padStart(2, '0').toUpperCase();
         codecStr = `avc1.${profile}${compat}${level}`;
         currentCodecRef.current = codecStr;
+        hasDescription = true;
       }
 
       const config: VideoDecoderConfig = {
         codec: codecStr,
-        optimizeForLatency: true,
+        codedWidth: width,
+        codedHeight: height,
+        // CRITICAL: Set description for AVCC format (ISO 14496-15)
+        // When description is set, decoder expects length-prefixed bitstream, not Annex-B
+        ...(hasDescription && description ? { description } : {}),
+        optimizeForLatency: !forceSoftware,
         hardwareAcceleration: forceSoftware ? 'prefer-software' : 'prefer-hardware',
       };
 
-      // Check support proactively
+      // Track if we're using AVCC format (will need to convert Annex-B → AVCC)
+      usingDescriptionRef.current = hasDescription;
+
+      console.log(`[H264Player] Decoder config:`, {
+        codec: codecStr,
+        size: `${width}x${height}`,
+        hasDescription,
+        hardwareAcceleration: config.hardwareAcceleration,
+        optimizeForLatency: config.optimizeForLatency,
+      });
+
+      // Check support proactively and adjust config as needed
       try {
         const support = await VideoDecoder.isConfigSupported(config);
         if (!support.supported) {
@@ -119,6 +185,25 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
         }
       } catch (checkErr) {
         console.warn("[H264Player] isConfigSupported check failed:", checkErr);
+      }
+
+      // FINAL VERIFICATION: Ensure the final configuration is actually supported
+      try {
+        const finalSupport = await VideoDecoder.isConfigSupported(config);
+        if (!finalSupport.supported) {
+          console.error('[H264Player] Final configuration not supported:', {
+            codec: config.codec,
+            hardwareAcceleration: config.hardwareAcceleration,
+            optimizeForLatency: config.optimizeForLatency,
+          });
+          setError(`Configuration not supported: ${config.codec}`);
+          return false;
+        }
+        console.log('[H264Player] Configuration verified as supported:', config);
+      } catch (verifyErr) {
+        console.error('[H264Player] Final config verification failed:', verifyErr);
+        setError('Cannot verify decoder configuration support');
+        return false;
       }
 
       // Create Decoder
@@ -149,10 +234,12 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
           errorCountRef.current++;
           console.error(`[H264Player] Decoder error (${errorCountRef.current}):`, e);
 
-          // Check for Unsupported Configuration error (common on Windows)
-          if (e.message && (e.message.includes('Unsupported configuration') || e.message.includes('Config not supported') || e.message.includes('configuration')) && !forceSoftware) {
-            console.warn('[H264Player] Unsupported configuration detected (async error). Switching to persistent software decoding.');
+          // AGGRESSIVE FALLBACK: If any error occurs and we are using hardware, switch to software immediately.
+          // This covers "Unsupported configuration", "Decode error", and unknown errors on Windows.
+          if (!forceSoftware) {
+            console.warn('[H264Player] Decoder error detected. Switching to persistent software decoding & disabling latency opt.');
             setForceSoftware(true);
+            // Reset error count to give software a chance
             errorCountRef.current = 0;
             return;
           }
@@ -179,15 +266,13 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       // Update current resolution for stats
       currentResolutionRef.current = { width, height };
 
-      // NOTE: strict configure
+      // Configure decoder with verified config
       try {
         decoder.configure(config);
       } catch (e: any) {
-        // Safe fallback if configure throws synchronously
-        console.warn(`[H264Player] Sync configure failed (${e.message}), force software.`);
-        config.hardwareAcceleration = 'prefer-software';
-        setForceSoftware(true);
-        decoder.configure(config);
+        console.error(`[H264Player] Configure failed even after verification: ${e.message}`);
+        setError(`Failed to configure decoder: ${e.message}`);
+        return false;
       }
 
       setIsInitialized(true);
@@ -280,16 +365,23 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       // Store keyframes for recovery
       if (frameData.is_keyframe) {
         lastKeyframeRef.current = h264Data;
+      }
 
-        // Don't reconfigure if already configured - just decode
-        // Reconfiguring mid-stream can cause decoder errors
+      // CRITICAL: Convert Annex-B to AVCC if decoder is using description
+      // When config.description is set, decoder expects AVCC (length-prefixed) format
+      let dataForDecoder = h264Data;
+      if (usingDescriptionRef.current) {
+        dataForDecoder = annexBToAvcc(h264Data);
+        if (frameData.is_keyframe) {
+          console.log(`[H264Player] Converted Annex-B → AVCC: ${h264Data.length} → ${dataForDecoder.length} bytes`);
+        }
       }
 
       const chunk = new EncodedVideoChunk({
         type: frameData.is_keyframe ? 'key' : 'delta',
         timestamp: frameData.timestamp * 1000, // Convert to microseconds
         duration: undefined,
-        data: h264Data,
+        data: dataForDecoder,
       });
 
       decoder.decode(chunk);
@@ -333,13 +425,18 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
         const description = arrayToUint8Array(frameData.sps_pps);
         initDecoder(frameData.width, frameData.height, description).then((success) => {
           if (success) {
-            // Retry with the keyframe
+            // Retry with the keyframe (convert if needed)
             try {
+              let retryData = lastKeyframeRef.current!;
+              if (usingDescriptionRef.current) {
+                retryData = annexBToAvcc(retryData);
+                console.log('[H264Player] Retry: Converted keyframe to AVCC');
+              }
               const chunk = new EncodedVideoChunk({
                 type: 'key',
                 timestamp: frameData.timestamp * 1000,
                 duration: undefined,
-                data: lastKeyframeRef.current!, // safe because of check above
+                data: retryData,
               });
               decoderRef.current?.decode(chunk);
               lastProcessedTimestampRef.current = frameData.timestamp;

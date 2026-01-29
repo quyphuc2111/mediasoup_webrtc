@@ -703,7 +703,12 @@ fn start_screen_capture(
             }
         };
 
-        let monitor = match monitors.first() {
+        let monitor = monitors
+            .iter()
+            .find(|m| m.is_primary())
+            .or_else(|| monitors.first());
+
+        let monitor = match monitor {
             Some(m) => m,
             None => {
                 crate::log_debug("error", "[ScreenCapture] No monitors found");
@@ -1147,7 +1152,8 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
     state.set_status(AgentStatus::Starting);
 
     // Get configuration
-    let port = state.config.lock().map(|c| c.port).unwrap_or(3017);
+    let default_port = state.config.lock().map(|c| c.port).unwrap_or(3017);
+    let mut port = default_port;
 
     // Create shutdown channel
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
@@ -1156,37 +1162,59 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
         *tx = Some(shutdown_tx.clone());
     }
 
-    // Bind to port with SO_REUSEADDR
-    let addr_str = format!("0.0.0.0:{}", port);
-    println!("[StudentAgent] Binding WebSocket server to: {}", addr_str);
+    // Try to bind to the requested port, if that fails, try a random port
+    let socket = match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("[StudentAgent] Failed to create socket: {}", e);
+            return Err(format!("Failed to create socket: {}", e));
+        }
+    };
 
-    // Create socket with SO_REUSEADDR to allow port reuse
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)).map_err(|e| {
-        println!("[StudentAgent] Failed to create socket: {}", e);
-        format!("Failed to create socket: {}", e)
-    })?;
-
-    // Set SO_REUSEADDR to allow port reuse after crash/restart
-    socket.set_reuse_address(true).map_err(|e| {
+    if let Err(e) = socket.set_reuse_address(true) {
         println!("[StudentAgent] Failed to set SO_REUSEADDR: {}", e);
-        format!("Failed to set SO_REUSEADDR: {}", e)
-    })?;
+        return Err(format!("Failed to set SO_REUSEADDR: {}", e));
+    }
 
-    // Set non-blocking mode
-    socket.set_nonblocking(true).map_err(|e| {
+    if let Err(e) = socket.set_nonblocking(true) {
         println!("[StudentAgent] Failed to set non-blocking: {}", e);
-        format!("Failed to set non-blocking: {}", e)
-    })?;
+        return Err(format!("Failed to set non-blocking: {}", e));
+    }
 
-    // Parse and bind address
+    let addr_str = format!("0.0.0.0:{}", port);
     let addr: std::net::SocketAddr = addr_str
         .parse()
         .map_err(|e| format!("Invalid address: {}", e))?;
 
-    socket.bind(&addr.into()).map_err(|e| {
-        println!("[StudentAgent] Failed to bind: {}", e);
-        format!("Failed to bind to {}: {}", addr_str, e)
-    })?;
+    // Bind logic with fallback
+    if let Err(e) = socket.bind(&addr.into()) {
+        println!(
+            "[StudentAgent] Failed to bind to {}: {}. Trying random port...",
+            addr_str, e
+        );
+        // Try random port
+        let random_addr: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
+        socket.bind(&random_addr.into()).map_err(|e| {
+            println!("[StudentAgent] Failed to bind to random port: {}", e);
+            format!("Failed to bind to random port: {}", e)
+        })?;
+    }
+
+    // Get the actual bound port
+    let local_addr = socket
+        .local_addr()
+        .map_err(|e| format!("Failed to get local address: {}", e))?;
+    // Convert socket2::SockAddr to std::net::SocketAddr
+    let local_addr = local_addr
+        .as_socket()
+        .ok_or("Failed to get socket address")?;
+    port = local_addr.port();
+
+    // Update config with actual port
+    if let Ok(mut config) = state.config.lock() {
+        config.port = port;
+        println!("[StudentAgent] Updated config with actual port: {}", port);
+    }
 
     // Listen
     socket.listen(128).map_err(|e| {
