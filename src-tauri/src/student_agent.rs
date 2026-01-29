@@ -1112,6 +1112,37 @@ fn code_to_key(code: &str, key: &str) -> Key {
     }
 }
 
+/// Kill any process listening on the specified port
+fn kill_port_holder(port: u16) {
+    #[cfg(target_os = "windows")]
+    {
+        // PowerShell command to find process ID by port and kill it
+        // Get-NetTCPConnection finds the connection, .OwningProcess gets PID, Stop-Process kills it
+        let cmd = format!("Get-Process -Id (Get-NetTCPConnection -LocalPort {} -ErrorAction SilentlyContinue).OwningProcess -ErrorAction SilentlyContinue | Stop-Process -Force", port);
+
+        println!(
+            "[StudentAgent] Attempting to free port {} using PowerShell...",
+            port
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(&["-NoProfile", "-Command", &cmd])
+            .output();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        println!(
+            "[StudentAgent] Attempting to free port {} using lsof...",
+            port
+        );
+        // lsof finds the PID, xargs kill kills it
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("lsof -t -i:{} | xargs kill -9", port))
+            .output();
+    }
+}
+
 /// Start the student agent server
 pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
     println!("[StudentAgent] start_agent called");
@@ -1167,6 +1198,11 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
     // Get configuration
     let default_port = state.config.lock().map(|c| c.port).unwrap_or(3017);
     let mut port = default_port;
+
+    // Forcefully kill any process holding the port to ensure we can bind
+    kill_port_holder(port);
+    // Give OS a moment to release the port
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Create shutdown channel
     let (shutdown_tx, _) = broadcast::channel::<()>(1);
