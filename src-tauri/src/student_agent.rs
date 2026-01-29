@@ -1112,17 +1112,21 @@ fn code_to_key(code: &str, key: &str) -> Key {
     }
 }
 
-/// Kill any process listening on the specified port
+/// Kill any process listening on the specified port, excluding the current process
 fn kill_port_holder(port: u16) {
+    let current_pid = std::process::id();
+
     #[cfg(target_os = "windows")]
     {
-        // PowerShell command to find process ID by port and kill it
-        // Get-NetTCPConnection finds the connection, .OwningProcess gets PID, Stop-Process kills it
-        let cmd = format!("Get-Process -Id (Get-NetTCPConnection -LocalPort {} -ErrorAction SilentlyContinue).OwningProcess -ErrorAction SilentlyContinue | Stop-Process -Force", port);
+        // PowerShell command to find process ID by port and kill it, EXCEPT current PID
+        // Get-NetTCPConnection finds the connection, .OwningProcess gets PID
+        // Where-Object filters out current PID
+        // Stop-Process kills the rest
+        let cmd = format!("Get-Process -Id (Get-NetTCPConnection -LocalPort {} -ErrorAction SilentlyContinue).OwningProcess -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne {} }} | Stop-Process -Force", port, current_pid);
 
         println!(
-            "[StudentAgent] Attempting to free port {} using PowerShell...",
-            port
+            "[StudentAgent] Attempting to free port {} using PowerShell (excluding self: {})...",
+            port, current_pid
         );
         let _ = std::process::Command::new("powershell")
             .args(&["-NoProfile", "-Command", &cmd])
@@ -1132,14 +1136,17 @@ fn kill_port_holder(port: u16) {
     #[cfg(not(target_os = "windows"))]
     {
         println!(
-            "[StudentAgent] Attempting to free port {} using lsof...",
-            port
+            "[StudentAgent] Attempting to free port {} using lsof (excluding self: {})...",
+            port, current_pid
         );
-        // lsof finds the PID, xargs kill kills it
-        let _ = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("lsof -t -i:{} | xargs kill -9", port))
-            .output();
+        // lsof finds the PID
+        // grep -v excludes current PID
+        // xargs kill kills it (if any remain)
+        let cmd = format!(
+            "lsof -t -i:{} | grep -v ^{}$ | xargs kill -9",
+            port, current_pid
+        );
+        let _ = std::process::Command::new("sh").arg("-c").arg(cmd).output();
     }
 }
 

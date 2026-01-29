@@ -10,20 +10,21 @@ Before binding to the port, `start_agent` now calls `kill_port_holder(port)`, wh
 
 ### On Windows
 ```powershell
-Get-Process -Id (Get-NetTCPConnection -LocalPort 3017).OwningProcess | Stop-Process -Force
+Get-Process ... | Where-Object { $_.Id -ne <CURRENT_PID> } | Stop-Process -Force
 ```
 *Requires PowerShell (standard on modern Windows).*
 
 ### On macOS / Linux
 ```bash
-lsof -t -i:3017 | xargs kill -9
+lsof -t -i:3017 | grep -v ^<CURRENT_PID>$ | xargs kill -9
 ```
 *Requires `lsof` tool.*
 
 ## Behavior
 1. Agent starts.
 2. Checks configured port (default 3017).
-3. Forcefully terminates any process listening on that port.
+3. Forcefully terminates any process listening on that port **EXCEPT the current application itself**.
+   - This prevents the app from killing itself if it already bound the port (e.g. for Discovery).
 4. Waits 500ms.
 5. Binds to the port.
 
