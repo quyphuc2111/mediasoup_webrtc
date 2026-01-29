@@ -145,6 +145,12 @@ pub enum TeacherMessage {
 
     #[serde(rename = "request_keyframe")]
     RequestKeyframe,
+
+    #[serde(rename = "shutdown")]
+    Shutdown,
+
+    #[serde(rename = "restart")]
+    Restart,
 }
 
 /// Command to send to a connection handler
@@ -156,6 +162,32 @@ pub enum ConnectionCommand {
     SendMouseInput(MouseInputEvent),
     SendKeyboardInput(KeyboardInputEvent),
     SendTeacherMessage(TeacherMessage),
+}
+
+// ... existing code ...
+
+/// Send a power command to a student
+pub fn send_power_command(state: &ConnectorState, id: &str, action: &str) -> Result<(), String> {
+    let msg = match action {
+        "shutdown" => TeacherMessage::Shutdown,
+        "restart" => TeacherMessage::Restart,
+        _ => return Err(format!("Invalid power action: {}", action)),
+    };
+
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+    let sender = senders.get(id).ok_or("Student not connected")?;
+
+    // We need to clone the sender to use it here
+    let sender = sender.clone();
+
+    // Send using a task to avoid blocking the mutex
+    tokio::spawn(async move {
+        let _ = sender
+            .send(ConnectionCommand::SendTeacherMessage(msg))
+            .await;
+    });
+
+    Ok(())
 }
 
 /// Screen frame data

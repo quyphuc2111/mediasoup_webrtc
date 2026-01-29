@@ -1073,6 +1073,15 @@ fn send_remote_keyframe_request(
     teacher_connector::request_keyframe(&state, &connection_id)
 }
 
+#[tauri::command]
+fn send_remote_power_command(
+    connection_id: String,
+    action: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_power_command(&state, &connection_id, &action)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1139,7 +1148,8 @@ pub fn run() {
             // Remote Control commands
             send_remote_mouse_event,
             send_remote_keyboard_event,
-            send_remote_keyframe_request
+            send_remote_keyframe_request,
+            send_remote_power_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -120,6 +120,12 @@ pub enum TeacherMessage {
 
     #[serde(rename = "request_keyframe")]
     RequestKeyframe,
+
+    #[serde(rename = "shutdown")]
+    Shutdown,
+
+    #[serde(rename = "restart")]
+    Restart,
 }
 
 /// Messages from student to teacher
@@ -644,6 +650,68 @@ where
                         );
                     }
                 }
+            }
+        }
+
+        TeacherMessage::Shutdown => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            log::info!("[StudentAgent] Received SHUTDOWN command from teacher");
+
+            // Execute shutdown command based on OS
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("shutdown")
+                    .args(["/s", "/t", "0"])
+                    .spawn()
+                    .map_err(|e| format!("Failed to execute shutdown: {}", e))?;
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::process::Command::new("shutdown")
+                    .args(["-h", "now"])
+                    .spawn()
+                    .map_err(|e| format!("Failed to execute shutdown: {}", e))?;
+            }
+        }
+
+        TeacherMessage::Restart => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            log::info!("[StudentAgent] Received RESTART command from teacher");
+
+            // Execute restart command based on OS
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("shutdown")
+                    .args(["/r", "/t", "0"])
+                    .spawn()
+                    .map_err(|e| format!("Failed to execute restart: {}", e))?;
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::process::Command::new("shutdown")
+                    .args(["-r", "now"])
+                    .spawn()
+                    .map_err(|e| format!("Failed to execute restart: {}", e))?;
             }
         }
     }

@@ -335,6 +335,24 @@ export function StudentFullView({
     }
   }, [isRemoteControlActive, onToggleRemoteControl]);
 
+  const handlePowerAction = useCallback(async (action: 'shutdown' | 'restart') => {
+    const confirmMsg = action === 'shutdown'
+      ? 'Bạn có chắc chắn muốn TẮT MÁY học sinh này không?'
+      : 'Bạn có chắc chắn muốn KHỞI ĐỘNG LẠI máy học sinh này không?';
+
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      await invoke('send_remote_power_command', {
+        connectionId: student.id,
+        action: action
+      });
+    } catch (err) {
+      console.error('Failed to send power command:', err);
+      alert('Gửi lệnh thất bại: ' + err);
+    }
+  }, [student.id]);
+
   return (
     <div className={`student-full-view ${isRemoteControlActive ? 'remote-control-mode' : ''}`}>
       {/* Header */}
@@ -363,6 +381,24 @@ export function StudentFullView({
           >
             {isRemoteControlActive ? '🖱️ Đang điều khiển' : '🖱️ Điều khiển'}
           </button>
+
+          <button
+            onClick={() => handlePowerAction('restart')}
+            className="btn"
+            style={{ backgroundColor: '#f39c12', color: 'white' }}
+            title="Khởi động lại máy học sinh"
+          >
+            🔄 Restart
+          </button>
+          <button
+            onClick={() => handlePowerAction('shutdown')}
+            className="btn"
+            style={{ backgroundColor: '#c0392b', color: 'white' }}
+            title="Tắt máy học sinh"
+          >
+            🔌 Shutdown
+          </button>
+
           <button onClick={onStopScreen} className="btn danger">
             ⏹️ Dừng xem
           </button>
