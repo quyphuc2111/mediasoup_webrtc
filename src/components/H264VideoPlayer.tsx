@@ -133,15 +133,18 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       }
 
       // Prepare config with description (AVCC format)
-      let codecStr = 'avc1.42E01f'; // Default Baseline
+      // RECOMMENDATION: Always use 'avc1.42E01f' (Baseline 3.1) as the base codec string.
+      // The actual profile/level is strictly defined in the 'description' (avcC) we provide.
+      let codecStr = 'avc1.42E01f';
       let hasDescription = false;
+      let realProfileLevel = '';
 
       if (description && description.length >= 4) {
         const profile = description[1].toString(16).padStart(2, '0').toUpperCase();
         const compat = description[2].toString(16).padStart(2, '0').toUpperCase();
         const level = description[3].toString(16).padStart(2, '0').toUpperCase();
-        codecStr = `avc1.${profile}${compat}${level}`;
-        currentCodecRef.current = codecStr;
+        realProfileLevel = `avc1.${profile}${compat}${level}`;
+        // We stick to standard baseline string for compatibility
         hasDescription = true;
       }
 
@@ -161,6 +164,7 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
 
       console.log(`[H264Player] Decoder config attempt:`, {
         codec: codecStr,
+        realProfile: realProfileLevel,
         originalSize: `${width}x${height}`,
         codedSize: `${config.codedWidth}x${config.codedHeight}`,
         hasDescription,
@@ -169,41 +173,23 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       });
 
       // Check support proactively and adjust config as needed
+      // Check support proactively
       try {
-        let support = await VideoDecoder.isConfigSupported(config);
+        const support = await VideoDecoder.isConfigSupported(config);
 
-        // 1. If strict config not supported, try software
         if (!support.supported) {
-          console.warn(`[H264Player] Hardware config not supported (${config.codec}), switching to software.`);
-          config.hardwareAcceleration = 'prefer-software';
-          support = await VideoDecoder.isConfigSupported(config);
-        }
+          // Do NOT automatically switch to software here. 
+          // Windows D3D11 often reports "false" for isConfigSupported but configure() works fine.
+          // We only switch to software if the USER forces it (via error-triggered retry).
+          console.warn(`[H264Player] isConfigSupported reports FALSE for ${codecStr}, but proceeding anyway (potential false negative).`);
 
-        // 2. If software not supported, try disabling low-latency
-        if (!support.supported) {
-          config.optimizeForLatency = false;
-          console.warn(`[H264Player] Software config not supported, disabling low-latency.`);
-          support = await VideoDecoder.isConfigSupported(config);
-        }
-
-        // 3. Fallback: If specific codec string fails (e.g. avc1.42C02A), try standard Baseline (avc1.42E01f)
-        // Many decoders tolerate mismatched codec strings if the description/bitstream is valid
-        if (!support.supported && codecStr !== 'avc1.42E01f') {
-          console.warn(`[H264Player] Codec ${codecStr} not supported, trying fallback 'avc1.42E01f'`);
-          config.codec = 'avc1.42E01f';
-          support = await VideoDecoder.isConfigSupported(config);
-        }
-
-        // Persistent fallback
-        if (config.hardwareAcceleration === 'prefer-software') {
-          setForceSoftware(true);
-        }
-
-        // FINAL CHECK
-        if (!support.supported) {
-          // Instead of failing, we WARN and PROCEED. 
-          // Windows sometimes reports false negatives for isConfigSupported but configure() works.
-          console.warn('[H264Player] Configuration reported as NOT supported, but will attempt configure() anyway:', config);
+          // Optional: If we are not forcing software yet, we might want to try checking software support just to know
+          if (!forceSoftware) {
+            const softConfig = { ...config, hardwareAcceleration: 'prefer-software' as const };
+            VideoDecoder.isConfigSupported(softConfig).then(s => {
+              if (s.supported) console.log('[H264Player] Software decoder WOULD be supported.');
+            });
+          }
         } else {
           console.log('[H264Player] Configuration verified as supported:', config);
         }

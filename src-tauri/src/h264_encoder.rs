@@ -93,162 +93,84 @@ impl H264Encoder {
     
     /// Extract SPS and PPS from Annex-B format and convert to AVCC
     /// Returns AVCC format description for WebCodecs
-    fn extract_sps_pps_to_avcc(annex_b_data: &[u8]) -> Option<Vec<u8>> {
-        // Annex-B format uses start codes: 0x00 0x00 0x00 0x01 or 0x00 0x00 0x01
-        let mut sps: Option<Vec<u8>> = None;
-        let mut pps: Option<Vec<u8>> = None;
-        let mut i = 0;
-        
-        while i < annex_b_data.len().saturating_sub(4) {
-            // Check for 4-byte start code: 0x00 0x00 0x00 0x01
-            if annex_b_data[i] == 0x00 
-                && annex_b_data[i + 1] == 0x00 
-                && annex_b_data[i + 2] == 0x00 
-                && annex_b_data[i + 3] == 0x01 {
-                
-                if i + 4 < annex_b_data.len() {
-                    let nal_header = annex_b_data[i + 4];
-                    let nal_type = nal_header & 0x1F;
-                    
-                    // Find next start code
-                    let mut next_start = i + 5;
-                    while next_start < annex_b_data.len().saturating_sub(4) {
-                        if (annex_b_data[next_start] == 0x00 
-                            && annex_b_data[next_start + 1] == 0x00 
-                            && annex_b_data[next_start + 2] == 0x00 
-                            && annex_b_data[next_start + 3] == 0x01)
-                            || (annex_b_data[next_start] == 0x00 
-                                && annex_b_data[next_start + 1] == 0x00 
-                                && annex_b_data[next_start + 2] == 0x01) {
-                            break;
-                        }
-                        next_start += 1;
-                    }
-                    
-                    // Extract NAL unit (without start code and header)
-                    let nal_data = &annex_b_data[i + 5..next_start];
-                    
-                    match nal_type {
-                        7 => { // SPS
-                            sps = Some(nal_data.to_vec());
-                        }
-                        8 => { // PPS
-                            pps = Some(nal_data.to_vec());
-                        }
-                        _ => {}
-                    }
-                    
-                    i = next_start;
-                    continue;
-                }
-            }
-            
-            // Check for 3-byte start code: 0x00 0x00 0x01
-            if i < annex_b_data.len().saturating_sub(3)
-                && annex_b_data[i] == 0x00 
-                && annex_b_data[i + 1] == 0x00 
-                && annex_b_data[i + 2] == 0x01 {
-                
-                if i + 3 < annex_b_data.len() {
-                    let nal_header = annex_b_data[i + 3];
-                    let nal_type = nal_header & 0x1F;
-                    
-                    // Find next start code
-                    let mut next_start = i + 4;
-                    while next_start < annex_b_data.len().saturating_sub(3) {
-                        if (annex_b_data[next_start] == 0x00 
-                            && annex_b_data[next_start + 1] == 0x00 
-                            && annex_b_data[next_start + 2] == 0x00 
-                            && annex_b_data[next_start + 3] == 0x01)
-                            || (annex_b_data[next_start] == 0x00 
-                                && annex_b_data[next_start + 1] == 0x00 
-                                && annex_b_data[next_start + 2] == 0x01) {
-                            break;
-                        }
-                        next_start += 1;
-                    }
-                    
-                    // Extract NAL unit (without start code and header)
-                    let nal_data = &annex_b_data[i + 4..next_start];
-                    
-                    match nal_type {
-                        7 => { // SPS
-                            sps = Some(nal_data.to_vec());
-                        }
-                        8 => { // PPS
-                            pps = Some(nal_data.to_vec());
-                        }
-                        _ => {}
-                    }
-                    
-                    i = next_start;
-                    continue;
-                }
-            }
-            
+    fn extract_sps_pps_to_avcc(annex_b: &[u8]) -> Option<Vec<u8>> {
+        fn is_sc3(d: &[u8], i: usize) -> bool {
+            i + 3 <= d.len() && d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 1
+        }
+        fn is_sc4(d: &[u8], i: usize) -> bool {
+            i + 4 <= d.len() && d[i] == 0 && d[i + 1] == 0 && d[i + 2] == 0 && d[i + 3] == 1
+        }
+
+        let mut i = 0usize;
+        // find first start code
+        while i < annex_b.len() && !is_sc3(annex_b, i) && !is_sc4(annex_b, i) {
             i += 1;
         }
-        
-        // Convert to AVCC format if we have both SPS and PPS
-        let has_sps = sps.is_some();
-        let has_pps = pps.is_some();
-        
-        if let (Some(sps_data), Some(pps_data)) = (sps, pps) {
-            if sps_data.len() < 4 || pps_data.is_empty() {
-                crate::log_debug("warn", &format!("[H264Encoder] SPS/PPS too short: SPS={} bytes, PPS={} bytes", sps_data.len(), pps_data.len()));
-                return None;
+
+        let mut sps: Option<Vec<u8>> = None;
+        let mut pps: Option<Vec<u8>> = None;
+
+        while i < annex_b.len() {
+            let sc = if is_sc4(annex_b, i) { 4 } else if is_sc3(annex_b, i) { 3 } else { break };
+            i += sc;
+            if i >= annex_b.len() { break; }
+
+            let nal_start = i; // <-- NAL header starts here (0x67/0x68/...)
+            // find next start code
+            while i < annex_b.len() && !is_sc3(annex_b, i) && !is_sc4(annex_b, i) {
+                i += 1;
             }
-            
-            // AVCC format:
-            // [1 byte: configurationVersion = 1]
-            // [1 byte: AVCProfileIndication] (from SPS byte 1)
-            // [1 byte: profile_compatibility] (from SPS byte 2)
-            // [1 byte: AVCLevelIndication] (from SPS byte 3)
-            // [1 byte: lengthSizeMinusOne (0xFC = 4 bytes) | numOfSequenceParameterSets (0x01 = 1)]
-            // [2 bytes: SPS length (big-endian)]
-            // [SPS data]
-            // [1 byte: numOfPictureParameterSets (0x01 = 1)]
-            // [2 bytes: PPS length (big-endian)]
-            // [PPS data]
-            
-            let mut avcc = Vec::with_capacity(8 + sps_data.len() + pps_data.len());
-            
-            // Configuration version
-            avcc.push(1);
-            
-            // Profile and level from SPS
-            avcc.push(sps_data[0]); // AVCProfileIndication
-            avcc.push(sps_data[1]); // profile_compatibility
-            avcc.push(sps_data[2]); // AVCLevelIndication
-            
-            // lengthSizeMinusOne (4 bytes = 0xFC) | numOfSequenceParameterSets (1 = 0x01)
-            avcc.push(0xFC | 0x01);
-            
-            // SPS length (big-endian, 2 bytes)
-            avcc.push((sps_data.len() >> 8) as u8);
-            avcc.push(sps_data.len() as u8);
-            
-            // SPS data
-            avcc.extend_from_slice(&sps_data);
-            
-            // numOfPictureParameterSets
-            avcc.push(0x01);
-            
-            // PPS length (big-endian, 2 bytes)
-            avcc.push((pps_data.len() >> 8) as u8);
-            avcc.push(pps_data.len() as u8);
-            
-            // PPS data
-            avcc.extend_from_slice(&pps_data);
-            
-            crate::log_debug("info", &format!("[H264Encoder] Extracted SPS/PPS: SPS={} bytes, PPS={} bytes, AVCC={} bytes", 
-                sps_data.len(), pps_data.len(), avcc.len()));
-            
-            return Some(avcc);
+            let nal_end = i;
+
+            if nal_end <= nal_start { continue; }
+
+            let nal = &annex_b[nal_start..nal_end];
+            let nal_type = nal[0] & 0x1F;
+
+            match nal_type {
+                7 => sps = Some(nal.to_vec()), // SPS includes header 0x67
+                8 => pps = Some(nal.to_vec()), // PPS includes header 0x68
+                _ => {}
+            }
+
+            if sps.is_some() && pps.is_some() {
+                break;
+            }
         }
-        
-        crate::log_debug("warn", &format!("[H264Encoder] SPS/PPS not found: SPS={}, PPS={}", has_sps, has_pps));
-        None
+
+        let sps = sps?;
+        let pps = pps?;
+
+        // SPS must have at least: [nal_header, profile_idc, constraints, level_idc]
+        if sps.len() < 4 || pps.is_empty() {
+            return None;
+        }
+
+        // avcC
+        // configurationVersion(1)
+        // AVCProfileIndication (SPS[1])
+        // profile_compatibility (SPS[2])
+        // AVCLevelIndication (SPS[3])
+        // lengthSizeMinusOne: 0xFF (4-byte length)
+        // numOfSPS: 0xE1 (1 SPS)
+        let mut avcc = Vec::with_capacity(11 + sps.len() + pps.len());
+        avcc.push(1);
+        avcc.push(sps[1]);
+        avcc.push(sps[2]);
+        avcc.push(sps[3]);
+        avcc.push(0xFF); // reserved + lengthSizeMinusOne(3)
+        avcc.push(0xE1); // reserved + numOfSPS(1)
+
+        avcc.push((sps.len() >> 8) as u8);
+        avcc.push((sps.len() & 0xFF) as u8);
+        avcc.extend_from_slice(&sps);
+
+        avcc.push(0x01); // numOfPPS(1)
+        avcc.push((pps.len() >> 8) as u8);
+        avcc.push((pps.len() & 0xFF) as u8);
+        avcc.extend_from_slice(&pps);
+
+        Some(avcc)
     }
     
     /// Encode an RGBA frame to H.264
