@@ -78,6 +78,9 @@ export function useMediasoup() {
   const screenAudioProducerIdRef = useRef<string | null>(null);
   const [isScreenAudioEnabled, setIsScreenAudioEnabled] = useState(true);
   const [hasScreenAudio, setHasScreenAudio] = useState(false);
+  
+  // Chat messages callback
+  const chatMessageCallbackRef = useRef<((message: { senderId: string; senderName: string; content: string; timestamp: string; isTeacher: boolean }) => void) | null>(null);
 
   const clientRef = useRef<MediasoupClient | null>(null);
 
@@ -229,6 +232,11 @@ export function useMediasoup() {
         }
       },
       onStreamReady: setRemoteStream,
+      onChatMessage: (message) => {
+        if (chatMessageCallbackRef.current) {
+          chatMessageCallbackRef.current(message);
+        }
+      },
     });
 
     clientRef.current = client;
@@ -609,6 +617,20 @@ export function useMediasoup() {
     }
   }, [isScreenAudioEnabled]);
 
+  // Send chat message
+  const sendChatMessage = useCallback((content: string) => {
+    if (!clientRef.current) {
+      console.warn('[Chat] Cannot send message: not connected');
+      return;
+    }
+    clientRef.current.sendChatMessage(content);
+  }, []);
+
+  // Set chat message callback
+  const onChatMessage = useCallback((callback: (message: { senderId: string; senderName: string; content: string; timestamp: string; isTeacher: boolean }) => void) => {
+    chatMessageCallbackRef.current = callback;
+  }, []);
+
   return {
     connectionState,
     error,
@@ -631,5 +653,7 @@ export function useMediasoup() {
     disablePushToTalk,
     initializeStudentMicrophone,
     toggleScreenAudio,
+    sendChatMessage,
+    onChatMessage,
   };
 }

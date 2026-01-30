@@ -22,7 +22,7 @@ use file_transfer::FileTransferState;
 use student_agent::{AgentConfig, AgentState, AgentStatus};
 use teacher_connector::{ConnectorState, StudentConnection};
 
-use database::{delete_device, get_all_devices, init_database, save_device, SavedDevice};
+use database::{delete_device, get_all_devices, init_database, save_device, SavedDevice, authenticate_user, get_all_users, UserAccount, LoginResponse};
 use lan_discovery::{discover_devices, respond_to_discovery, DiscoveredDevice};
 
 #[derive(Default)]
@@ -698,6 +698,28 @@ fn remove_device_from_db(id: i64, state: State<DatabaseState>) -> Result<(), Str
 }
 
 // ============================================================
+// User Authentication Commands
+// ============================================================
+
+/// Login with username and password
+#[tauri::command]
+fn login(username: String, password: String, state: State<DatabaseState>) -> Result<LoginResponse, String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    Ok(authenticate_user(conn, &username, &password))
+}
+
+/// Get all users (admin only)
+#[tauri::command]
+fn get_users(state: State<DatabaseState>) -> Result<Vec<UserAccount>, String> {
+    let db_state = state.conn.lock().map_err(|e| e.to_string())?;
+    let conn = db_state.as_ref().ok_or("Database not initialized")?;
+    
+    get_all_users(conn).map_err(|e| format!("Failed to get users: {}", e))
+}
+
+// ============================================================
 // Crypto Commands - View Client Authentication
 // ============================================================
 
@@ -1221,6 +1243,9 @@ pub fn run() {
             save_device_to_db,
             get_saved_devices,
             remove_device_from_db,
+            // User Authentication commands
+            login,
+            get_users,
             // Crypto commands
             crypto_generate_keypair,
             crypto_load_keypair,

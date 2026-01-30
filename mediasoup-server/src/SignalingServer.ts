@@ -96,6 +96,9 @@ export class SignalingServer {
       case 'getProducers':
         await this.handleGetProducers(ws);
         break;
+      case 'chatMessage':
+        await this.handleChatMessage(ws, data);
+        break;
       default:
         console.warn('Unknown message type:', type);
     }
@@ -373,6 +376,31 @@ export class SignalingServer {
     }
 
     this.send(ws, { type: 'producers', data: producers });
+  }
+
+  private async handleChatMessage(ws: WebSocket, data: { content: string; timestamp: string }): Promise<void> {
+    const info = this.clients.get(ws);
+    if (!info) return;
+
+    const room = this.manager.getRoom(info.roomId);
+    if (!room) return;
+
+    const peer = room.getPeer(info.peerId);
+    if (!peer) return;
+
+    // Broadcast chat message to all peers in the room (except sender)
+    this.broadcast(info.roomId, {
+      type: 'chatMessage',
+      data: {
+        senderId: info.peerId,
+        senderName: peer.name,
+        content: data.content,
+        timestamp: data.timestamp,
+        isTeacher: peer.isTeacher,
+      },
+    }, ws);
+
+    console.log(`[Chat] ${peer.name}: ${data.content}`);
   }
 
   private handleDisconnect(ws: WebSocket): void {

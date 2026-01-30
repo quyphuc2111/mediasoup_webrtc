@@ -17,6 +17,7 @@ export interface MediasoupClientEvents {
   onPeerLeft: (peerId: string, wasTeacher: boolean) => void;
   onError: (error: string) => void;
   onStreamReady: (stream: MediaStream) => void;
+  onChatMessage: (message: { senderId: string; senderName: string; content: string; timestamp: string; isTeacher: boolean }) => void;
 }
 
 export class MediasoupClient {
@@ -127,6 +128,9 @@ export class MediasoupClient {
         if (data.wasTeacher) {
           this.closeAllConsumers();
         }
+        break;
+      case 'chatMessage':
+        this.events.onChatMessage?.(data);
         break;
       case 'error':
         this.events.onError?.(data.message);
@@ -495,5 +499,20 @@ export class MediasoupClient {
     this.cleanup();
     this.ws?.close();
     this.ws = null;
+  }
+
+  sendChatMessage(content: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[MediasoupClient] Cannot send chat message: WebSocket not connected');
+      return;
+    }
+
+    this.ws.send(JSON.stringify({
+      type: 'chatMessage',
+      data: {
+        content,
+        timestamp: new Date().toISOString(),
+      }
+    }));
   }
 }

@@ -25,4 +25,4 @@ dist-student/
 *.sw?
 .cursor/
 .agent/
-labmaster
+# labmaster

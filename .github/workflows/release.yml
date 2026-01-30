@@ -4,13 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.0.0)'
+        required: false
+        default: 'v0.0.0-dev'
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build SmartlabPromax
+  build-windows:
+    name: Build Windows (exe)
     runs-on: windows-latest
 
     steps:
@@ -28,81 +34,142 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
       - name: Install frontend dependencies
         run: npm ci
 
-      # Temporarily disabled - mediasoup server build
-      # - name: Install mediasoup-server dependencies
-      #   run: npm ci
-      #   working-directory: mediasoup-server
+      - name: Build frontend
+        run: npm run build
 
-      # - name: Build mediasoup-server
-      #   run: npm run build
-      #   working-directory: mediasoup-server
-
-      # - name: Download Node.js portable
-      #   shell: bash
-      #   run: |
-      #     # Retry logic for download
-      #     MAX_RETRIES=3
-      #     RETRY_COUNT=0
-      #     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-      #       echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES to download Node.js..."
-      #       if curl -L --connect-timeout 30 --max-time 300 --retry 3 --retry-delay 5 -o node.zip https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip; then
-      #         echo "Download successful!"
-      #         break
-      #       else
-      #         RETRY_COUNT=$((RETRY_COUNT + 1))
-      #         if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-      #           echo "Download failed, retrying in 10 seconds..."
-      #           sleep 10
-      #         else
-      #           echo "Download failed after $MAX_RETRIES attempts"
-      #           exit 1
-      #         fi
-      #       fi
-      #     done
-      #     
-      #     # Verify download
-      #     if [ ! -f node.zip ] || [ ! -s node.zip ]; then
-      #       echo "Error: node.zip is missing or empty"
-      #       exit 1
-      #     fi
-      #     
-      #     echo "Extracting Node.js..."
-      #     unzip -q node.zip
-      #     mkdir -p src-tauri/binaries/node
-      #     mv node-v20.18.0-win-x64/* src-tauri/binaries/node/
-      #     echo "Node.js extracted successfully"
-
-      # - name: Prepare sidecar
-      #   shell: bash
-      #   run: |
-      #     mkdir -p src-tauri/binaries/server
-      #     cp -r mediasoup-server/dist src-tauri/binaries/server/
-      #     cp -r mediasoup-server/node_modules src-tauri/binaries/server/
-      #     cp mediasoup-server/package.json src-tauri/binaries/server/
-
-      - name: Build SmartlabPromax
+      - name: Build Tauri app (Windows)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name }}'
+          tagName: ${{ github.ref_name || github.event.inputs.version }}
+          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
           releaseBody: |
             ## SmartlabPromax - Phần mềm quản lý phòng máy
             
             ### Tính năng:
-            - 🖥️ Chia sẻ màn hình giáo viên
-            - 👁️ Xem màn hình học sinh
+            - 🖥️ Chia sẻ màn hình giáo viên (WebRTC/Mediasoup)
+            - 👁️ Xem màn hình học sinh real-time
             - 🖱️ Điều khiển từ xa
-            - 📤 Gửi/nhận file
+            - 📤 Gửi/nhận file qua LAN
             - 🔐 Xác thực Ed25519 & LDAP
-            - 🌐 Tự động phát hiện LAN
+            - 🌐 Tự động phát hiện thiết bị LAN
+            - 💬 Chat real-time trong lớp học
+            - 🗄️ Quản lý database SQLite
             
-            ### Cài đặt:
-            Tải file `.exe` và chạy để cài đặt.
+            ### Cài đặt Windows:
+            1. Tải file `.exe` (NSIS installer)
+            2. Chạy file để cài đặt
+            3. Khởi động ứng dụng từ Start Menu
+            
+            ### Yêu cầu hệ thống:
+            - Windows 10/11 (64-bit)
+            - RAM: 4GB+
+            - Disk: 200MB+
           releaseDraft: false
           prerelease: false
           args: --target x86_64-pc-windows-msvc --bundles nsis
+
+  build-macos:
+    name: Build macOS (dmg)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Tauri app (macOS Intel)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name || github.event.inputs.version }}
+          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-apple-darwin --bundles dmg
+
+      - name: Build Tauri app (macOS Apple Silicon)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name || github.event.inputs.version }}
+          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin --bundles dmg
+
+  build-linux:
+    name: Build Linux (deb/AppImage)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Tauri app (Linux)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name || github.event.inputs.version }}
+          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
+          releaseDraft: false
+          prerelease: false
+          args: --bundles deb,appimage
