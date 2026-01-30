@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { listen } from '@tauri-apps/api/event';
 import { StudentThumbnail } from '../components/StudentThumbnail';
 import { StudentFullView } from '../components/StudentFullView';
 import { KeyManager } from '../components/KeyManager';
@@ -41,6 +42,25 @@ interface ScreenFrame {
   codec: string;  // "h264" or "jpeg"
 }
 
+// File transfer types
+type TransferStatus = 
+  | 'Pending'
+  | 'Connecting'
+  | 'Transferring'
+  | 'Completed'
+  | 'Cancelled'
+  | { Failed: { error: string } };
+
+interface FileTransferProgress {
+  job_id: string;
+  file_name: string;
+  file_size: number;
+  transferred: number;
+  progress: number;
+  status: TransferStatus;
+  student_id: string;
+}
+
 interface ViewClientPageProps {
   onBack?: () => void;
 }
@@ -59,6 +79,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [dbInitialized, setDbInitialized] = useState(false);
+  const [fileTransfers, setFileTransfers] = useState<Record<string, FileTransferProgress>>({});
 
   // Initialize database and load saved devices
   useEffect(() => {
@@ -77,7 +98,6 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     let unlistenAll: (() => void) | null = null;
 
     const setupListener = async () => {
-      const { listen } = await import('@tauri-apps/api/event');
       const unlisten = await listen<[string, ScreenFrame]>('screen-frame', (event) => {
         const [connId, frame] = event.payload;
         setScreenFrames(prev => ({
@@ -91,6 +111,38 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     setupListener();
     return () => {
       if (unlistenAll) unlistenAll();
+    };
+  }, []);
+
+  // Listen for file transfer progress events
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupTransferListener = async () => {
+      unlisten = await listen<FileTransferProgress>('file-transfer-progress', (event) => {
+        const progress = event.payload;
+        setFileTransfers(prev => ({
+          ...prev,
+          [progress.job_id]: progress
+        }));
+
+        // Remove completed/cancelled transfers after 5 seconds
+        if (progress.status === 'Completed' || progress.status === 'Cancelled' || 
+            (typeof progress.status === 'object' && 'Failed' in progress.status)) {
+          setTimeout(() => {
+            setFileTransfers(prev => {
+              const newState = { ...prev };
+              delete newState[progress.job_id];
+              return newState;
+            });
+          }, 5000);
+        }
+      });
+    };
+
+    setupTransferListener();
+    return () => {
+      if (unlisten) unlisten();
     };
   }, []);
 
@@ -273,12 +325,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     }
 
     try {
-      // Read file as base64
-      const fileData = await invoke<string>('read_file_as_base64', {
-        path: filePath
-      });
-
-      // Get file info
+      // Get file info for display
       interface FileInfo {
         name: string;
         path: string;
@@ -291,24 +338,53 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
         path: filePath
       });
 
-      console.log(`Sending file "${fileInfo.name}" (${fileInfo.size} bytes) to ${student.name || student.ip}`);
+      console.log(`[FileTransfer] Starting chunked transfer: "${fileInfo.name}" (${fileInfo.size} bytes) to ${student.name || student.ip}`);
       
-      // Send via WebSocket to student
-      await invoke('send_file_to_student', {
+      // Start chunked TCP transfer (non-blocking)
+      const jobId = await invoke<string>('send_file_to_student', {
         studentId: studentId,
-        fileName: fileInfo.name,
-        fileData: fileData,
-        fileSize: fileInfo.size,
+        filePath: filePath,
       });
       
-      alert(`✅ Đã gửi file "${fileInfo.name}" tới ${student.name || student.ip}!`);
+      console.log(`[FileTransfer] Transfer job started: ${jobId}`);
       
     } catch (err) {
       setError(`Lỗi khi gửi file: ${err}`);
       console.error('Failed to send file:', err);
-      alert(`❌ Lỗi: ${err}`);
     }
   }, [connections]);
+
+  const cancelFileTransfer = useCallback(async (jobId: string) => {
+    try {
+      await invoke('cancel_file_transfer', { jobId });
+    } catch (err) {
+      console.error('Failed to cancel transfer:', err);
+    }
+  }, []);
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  const getTransferStatusText = (status: TransferStatus): string => {
+    if (typeof status === 'string') {
+      switch (status) {
+        case 'Pending': return 'Đang chờ...';
+        case 'Connecting': return 'Đang kết nối...';
+        case 'Transferring': return 'Đang truyền...';
+        case 'Completed': return '✅ Hoàn thành';
+        case 'Cancelled': return '❌ Đã hủy';
+        default: return status;
+      }
+    }
+    if ('Failed' in status) {
+      return `❌ Lỗi: ${status.Failed.error}`;
+    }
+    return 'Unknown';
+  };
 
   const getStatusText = (status: ConnectionStatus): string => {
     if (typeof status === 'string') {
@@ -556,6 +632,48 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       {savedDevices.length > 0 && (
         <div className="saved-devices-summary">
           <p>💾 {savedDevices.length} máy đã lưu</p>
+        </div>
+      )}
+
+      {/* File Transfer Progress */}
+      {Object.keys(fileTransfers).length > 0 && (
+        <div className="file-transfer-panel">
+          <h3>📤 Đang truyền file</h3>
+          {Object.values(fileTransfers).map((transfer) => {
+            const student = connections.find(c => c.id === transfer.student_id);
+            const isActive = transfer.status === 'Transferring' || transfer.status === 'Connecting';
+            
+            return (
+              <div key={transfer.job_id} className={`transfer-item ${typeof transfer.status === 'string' ? transfer.status.toLowerCase() : 'failed'}`}>
+                <div className="transfer-info">
+                  <span className="file-name">{transfer.file_name}</span>
+                  <span className="transfer-target">→ {student?.name || student?.ip || 'Unknown'}</span>
+                </div>
+                <div className="transfer-progress">
+                  <div className="progress-bar">
+                    <div 
+                      className="progress-fill" 
+                      style={{ width: `${transfer.progress}%` }}
+                    />
+                  </div>
+                  <span className="progress-text">
+                    {formatFileSize(transfer.transferred)} / {formatFileSize(transfer.file_size)} ({transfer.progress.toFixed(1)}%)
+                  </span>
+                </div>
+                <div className="transfer-status">
+                  <span>{getTransferStatusText(transfer.status)}</span>
+                  {isActive && (
+                    <button 
+                      onClick={() => cancelFileTransfer(transfer.job_id)}
+                      className="btn small danger"
+                    >
+                      ✕ Hủy
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
 

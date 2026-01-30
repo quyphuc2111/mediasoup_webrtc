@@ -18,6 +18,7 @@ mod teacher_connector;
 mod udp_audio;
 
 use crypto::{KeyPairInfo, VerifyResult};
+use file_transfer::FileTransferState;
 use student_agent::{AgentConfig, AgentState, AgentStatus};
 use teacher_connector::{ConnectorState, StudentConnection};
 
@@ -855,19 +856,34 @@ fn get_agent_runtime() -> &'static tokio::runtime::Runtime {
 /// Start the student agent
 #[tauri::command]
 fn start_student_agent(
+    app: AppHandle,
     port: u16,
     student_name: String,
-    state: State<Arc<AgentState>>,
+    agent_state: State<Arc<AgentState>>,
+    transfer_state: State<Arc<FileTransferState>>,
 ) -> Result<(), String> {
     // Update config
     {
-        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        let mut config = agent_state.config.lock().map_err(|e| e.to_string())?;
         config.port = port;
         config.student_name = student_name;
     }
 
+    // Start file receiver for chunked transfers
+    let transfer_state_clone = Arc::clone(&transfer_state);
+    let app_clone = app.clone();
+    get_agent_runtime().spawn(async move {
+        if let Err(e) = file_transfer::start_file_receiver(
+            transfer_state_clone,
+            app_clone,
+            port,
+        ).await {
+            log::error!("[FileTransfer] Failed to start file receiver: {}", e);
+        }
+    });
+
     // Start agent in background
-    let state_clone = Arc::clone(&state);
+    let state_clone = Arc::clone(&agent_state);
     get_agent_runtime().spawn(async move {
         if let Err(e) = student_agent::start_agent(state_clone).await {
             log::error!("[StudentAgent] Error: {}", e);
@@ -1074,16 +1090,46 @@ fn send_remote_keyframe_request(
     teacher_connector::request_keyframe(&state, &connection_id)
 }
 
-/// Send file to a student
+/// Send file to a student (chunked TCP transfer)
 #[tauri::command]
-fn send_file_to_student(
+async fn send_file_to_student(
+    app: AppHandle,
     student_id: String,
-    file_name: String,
-    file_data: String,
-    file_size: u64,
-    state: State<Arc<ConnectorState>>,
-) -> Result<(), String> {
-    teacher_connector::send_file(&state, &student_id, file_name, file_data, file_size)
+    file_path: String,
+    connector_state: State<'_, Arc<ConnectorState>>,
+    transfer_state: State<'_, Arc<FileTransferState>>,
+) -> Result<String, String> {
+    // Get student connection info
+    let conn = connector_state.get_connection(&student_id)
+        .ok_or_else(|| "Student not connected".to_string())?;
+    
+    // Send file via chunked TCP
+    file_transfer::send_file_chunked(
+        Arc::clone(&transfer_state),
+        app,
+        conn.ip,
+        conn.port,
+        file_path,
+        student_id,
+    ).await
+}
+
+/// Cancel a file transfer
+#[tauri::command]
+fn cancel_file_transfer(
+    job_id: String,
+    state: State<Arc<FileTransferState>>,
+) -> Result<bool, String> {
+    Ok(state.cancel_job(&job_id))
+}
+
+/// Get file transfer job status
+#[tauri::command]
+fn get_file_transfer_status(
+    job_id: String,
+    state: State<Arc<FileTransferState>>,
+) -> Result<Option<file_transfer::FileTransferJob>, String> {
+    Ok(state.get_job(&job_id))
 }
 
 // ============================================================
@@ -1149,6 +1195,7 @@ pub fn run() {
         .manage(AudioCaptureState::default())
         .manage(Arc::new(AgentState::default()))
         .manage(Arc::new(ConnectorState::default()))
+        .manage(Arc::new(FileTransferState::default()))
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
@@ -1201,6 +1248,8 @@ pub fn run() {
             send_remote_keyboard_event,
             send_remote_keyframe_request,
             send_file_to_student,
+            cancel_file_transfer,
+            get_file_transfer_status,
             // File Transfer commands
             list_directory,
             get_home_directory,

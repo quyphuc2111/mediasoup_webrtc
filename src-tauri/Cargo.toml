@@ -65,4 +65,6 @@ openh264 = "0.6"
 rayon = "1.8"
 # Remote control - simulate mouse/keyboard input
 enigo = "0.2"
+# Timestamp for file transfer job IDs
+chrono = "0.4"
 

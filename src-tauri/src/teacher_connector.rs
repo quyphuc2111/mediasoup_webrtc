@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::crypto;
 
@@ -403,11 +403,20 @@ async fn handle_connection(
         url
     );
 
-    // Connect to student
-    let (ws_stream, _) = connect_async(&url).await.map_err(|e| {
-        println!("[TeacherConnector] WebSocket connect failed: {}", e);
-        format!("Failed to connect: {}", e)
-    })?;
+    // WebSocket config with increased message size limit (100MB)
+    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(100 * 1024 * 1024), // 100MB
+        max_frame_size: Some(16 * 1024 * 1024),    // 16MB per frame
+        ..Default::default()
+    };
+
+    // Connect to student with config
+    let (ws_stream, _) = tokio_tungstenite::connect_async_with_config(&url, Some(ws_config), false)
+        .await
+        .map_err(|e| {
+            println!("[TeacherConnector] WebSocket connect failed: {}", e);
+            format!("Failed to connect: {}", e)
+        })?;
 
     println!("[TeacherConnector] WebSocket connected to: {}", url);
 

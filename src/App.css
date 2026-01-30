@@ -1832,3 +1832,129 @@ h1 {
 .btn.remote-control-btn.active {
   background: linear-gradient(135deg, #8b5cf6, #ec4899);
 }
+
+
+/* ============================================
+   File Transfer Progress Panel
+   ============================================ */
+
+.file-transfer-panel {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  width: 400px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  z-index: 1000;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.file-transfer-panel h3 {
+  margin: 0 0 1rem 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.transfer-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.transfer-item:last-child {
+  margin-bottom: 0;
+}
+
+.transfer-item.completed {
+  border-color: var(--success);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.transfer-item.failed {
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.transfer-item.cancelled {
+  border-color: var(--warning);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.transfer-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.transfer-info .file-name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.9rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-info .transfer-target {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.transfer-progress {
+  margin-bottom: 0.5rem;
+}
+
+.progress-bar {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #8b5cf6);
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+
+.transfer-item.completed .progress-fill {
+  background: var(--success);
+}
+
+.transfer-item.failed .progress-fill {
+  background: var(--danger);
+}
+
+.progress-text {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.transfer-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.transfer-status span {
+  color: var(--text-secondary);
+}
+
+.transfer-item.completed .transfer-status span {
+  color: var(--success);
+}
+
+.transfer-item.failed .transfer-status span {
+  color: var(--danger);
+}

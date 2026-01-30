@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::Message;
 
 use crate::crypto;
 use crate::h264_encoder::H264Encoder;
@@ -233,8 +233,14 @@ async fn handle_connection(
 ) {
     log::info!("[StudentAgent] New connection from: {}", addr);
 
-    // Accept WebSocket connection
-    let ws_stream = match accept_async(stream).await {
+    // Accept WebSocket connection with increased message size limit (100MB)
+    let ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(100 * 1024 * 1024), // 100MB
+        max_frame_size: Some(16 * 1024 * 1024),    // 16MB per frame
+        ..Default::default()
+    };
+    
+    let ws_stream = match tokio_tungstenite::accept_async_with_config(stream, Some(ws_config)).await {
         Ok(ws) => ws,
         Err(e) => {
             log::error!("[StudentAgent] WebSocket handshake failed: {}", e);
