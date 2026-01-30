@@ -42,6 +42,55 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install mediasoup-server dependencies
+        run: npm ci
+        working-directory: mediasoup-server
+
+      - name: Build mediasoup-server
+        run: npm run build
+        working-directory: mediasoup-server
+
+      - name: Download Node.js portable for Windows
+        shell: bash
+        run: |
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES to download Node.js..."
+            if curl -L --connect-timeout 30 --max-time 300 --retry 3 --retry-delay 5 -o node.zip https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip; then
+              echo "Download successful!"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "Download failed, retrying in 10 seconds..."
+                sleep 10
+              else
+                echo "Download failed after $MAX_RETRIES attempts"
+                exit 1
+              fi
+            fi
+          done
+          
+          if [ ! -f node.zip ] || [ ! -s node.zip ]; then
+            echo "Error: node.zip is missing or empty"
+            exit 1
+          fi
+          
+          echo "Extracting Node.js..."
+          unzip -q node.zip
+          mkdir -p src-tauri/binaries/node
+          mv node-v20.18.0-win-x64/* src-tauri/binaries/node/
+          echo "Node.js extracted successfully"
+
+      - name: Prepare mediasoup-server sidecar
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries/server
+          cp -r mediasoup-server/dist src-tauri/binaries/server/
+          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
+          cp mediasoup-server/package.json src-tauri/binaries/server/
+
       - name: Build frontend
         run: npm run build
 
@@ -73,7 +122,7 @@ jobs:
             ### Yêu cầu hệ thống:
             - Windows 10/11 (64-bit)
             - RAM: 4GB+
-            - Disk: 200MB+
+            - Disk: 500MB+
           releaseDraft: false
           prerelease: false
           args: --target x86_64-pc-windows-msvc --bundles nsis
@@ -105,10 +154,37 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Install mediasoup-server dependencies
+        run: npm ci
+        working-directory: mediasoup-server
+
+      - name: Build mediasoup-server
+        run: npm run build
+        working-directory: mediasoup-server
+
+      - name: Download Node.js portable for macOS (Intel)
+        run: |
+          curl -L -o node-intel.tar.gz https://nodejs.org/dist/v20.18.0/node-v20.18.0-darwin-x64.tar.gz
+          mkdir -p src-tauri/binaries/node-x64
+          tar -xzf node-intel.tar.gz -C src-tauri/binaries/node-x64 --strip-components=1
+
+      - name: Download Node.js portable for macOS (ARM)
+        run: |
+          curl -L -o node-arm.tar.gz https://nodejs.org/dist/v20.18.0/node-v20.18.0-darwin-arm64.tar.gz
+          mkdir -p src-tauri/binaries/node-arm64
+          tar -xzf node-arm.tar.gz -C src-tauri/binaries/node-arm64 --strip-components=1
+
+      - name: Prepare mediasoup-server sidecar
+        run: |
+          mkdir -p src-tauri/binaries/server
+          cp -r mediasoup-server/dist src-tauri/binaries/server/
+          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
+          cp mediasoup-server/package.json src-tauri/binaries/server/
+
       - name: Build frontend
         run: npm run build
 
-      - name: Build Tauri app (macOS Intel)
+      - name: Build Tauri app (macOS Universal)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -117,18 +193,7 @@ jobs:
           releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
           releaseDraft: false
           prerelease: false
-          args: --target x86_64-apple-darwin --bundles dmg
-
-      - name: Build Tauri app (macOS Apple Silicon)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name || github.event.inputs.version }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
-          releaseDraft: false
-          prerelease: false
-          args: --target aarch64-apple-darwin --bundles dmg
+          args: --target universal-apple-darwin --bundles dmg
 
   build-linux:
     name: Build Linux (deb/AppImage)
@@ -159,6 +224,27 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Install mediasoup-server dependencies
+        run: npm ci
+        working-directory: mediasoup-server
+
+      - name: Build mediasoup-server
+        run: npm run build
+        working-directory: mediasoup-server
+
+      - name: Download Node.js portable for Linux
+        run: |
+          curl -L -o node.tar.xz https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz
+          mkdir -p src-tauri/binaries/node
+          tar -xJf node.tar.xz -C src-tauri/binaries/node --strip-components=1
+
+      - name: Prepare mediasoup-server sidecar
+        run: |
+          mkdir -p src-tauri/binaries/server
+          cp -r mediasoup-server/dist src-tauri/binaries/server/
+          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
+          cp mediasoup-server/package.json src-tauri/binaries/server/
 
       - name: Build frontend
         run: npm run build
