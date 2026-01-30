@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { StudentThumbnail } from '../components/StudentThumbnail';
 import { StudentFullView } from '../components/StudentFullView';
 import { KeyManager } from '../components/KeyManager';
@@ -253,6 +254,62 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     }
   }, [connections]);
 
+  const sendFileToStudent = useCallback(async (studentId: string) => {
+    const student = connections.find(c => c.id === studentId);
+    if (!student) {
+      setError('Không tìm thấy học sinh');
+      return;
+    }
+
+    // Open file picker dialog
+    const filePath = await open({
+      multiple: false,
+      directory: false,
+      title: `Gửi file cho ${student.name || student.ip}`,
+    });
+
+    if (!filePath) {
+      return; // User cancelled
+    }
+
+    try {
+      // Read file as base64
+      const fileData = await invoke<string>('read_file_as_base64', {
+        path: filePath
+      });
+
+      // Get file info
+      interface FileInfo {
+        name: string;
+        path: string;
+        is_dir: boolean;
+        size: number;
+        modified: number;
+      }
+      
+      const fileInfo = await invoke<FileInfo>('get_file_info', {
+        path: filePath
+      });
+
+      console.log(`Sending file "${fileInfo.name}" (${fileInfo.size} bytes) to ${student.name || student.ip}`);
+      
+      // Send via WebSocket to student
+      await invoke('send_file_to_student', {
+        studentId: studentId,
+        fileName: fileInfo.name,
+        fileData: fileData,
+        fileSize: fileInfo.size,
+      });
+      
+      alert(`✅ Đã gửi file "${fileInfo.name}" tới ${student.name || student.ip}!`);
+      
+    } catch (err) {
+      setError(`Lỗi khi gửi file: ${err}`);
+      console.error('Failed to send file:', err);
+      alert(`❌ Lỗi: ${err}`);
+    }
+  }, [connections]);
+
   const getStatusText = (status: ConnectionStatus): string => {
     if (typeof status === 'string') {
       switch (status) {
@@ -455,6 +512,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
                     requestScreen(conn.id);
                   }
                 }}
+                onSendFile={() => sendFileToStudent(conn.id)}
               />
             ))}
 

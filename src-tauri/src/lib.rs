@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod audio_capture;
 mod crypto;
 mod database;
+mod file_transfer;
 mod h264_decoder;
 mod h264_encoder;
 mod lan_discovery;
@@ -1073,10 +1074,69 @@ fn send_remote_keyframe_request(
     teacher_connector::request_keyframe(&state, &connection_id)
 }
 
+/// Send file to a student
+#[tauri::command]
+fn send_file_to_student(
+    student_id: String,
+    file_name: String,
+    file_data: String,
+    file_size: u64,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_file(&state, &student_id, file_name, file_data, file_size)
+}
+
+// ============================================================
+// File Transfer Commands
+// ============================================================
+
+/// List files in a directory
+#[tauri::command]
+fn list_directory(path: String) -> Result<Vec<file_transfer::FileInfo>, String> {
+    file_transfer::list_directory(&path)
+}
+
+/// Get home directory
+#[tauri::command]
+fn get_home_directory() -> Result<String, String> {
+    file_transfer::get_home_directory()
+}
+
+/// Get desktop directory
+#[tauri::command]
+fn get_desktop_directory() -> Result<String, String> {
+    file_transfer::get_desktop_directory()
+}
+
+/// Get documents directory
+#[tauri::command]
+fn get_documents_directory() -> Result<String, String> {
+    file_transfer::get_documents_directory()
+}
+
+/// Read file as base64
+#[tauri::command]
+fn read_file_as_base64(path: String) -> Result<String, String> {
+    file_transfer::read_file_as_base64(&path)
+}
+
+/// Write file from base64
+#[tauri::command]
+fn write_file_from_base64(path: String, data: String) -> Result<(), String> {
+    file_transfer::write_file_from_base64(&path, &data)
+}
+
+/// Get file info
+#[tauri::command]
+fn get_file_info(path: String) -> Result<file_transfer::FileInfo, String> {
+    file_transfer::get_file_info(&path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Initialize logging system
             init_logging(app.handle().clone());
@@ -1139,7 +1199,16 @@ pub fn run() {
             // Remote Control commands
             send_remote_mouse_event,
             send_remote_keyboard_event,
-            send_remote_keyframe_request
+            send_remote_keyframe_request,
+            send_file_to_student,
+            // File Transfer commands
+            list_directory,
+            get_home_directory,
+            get_desktop_directory,
+            get_documents_directory,
+            read_file_as_base64,
+            write_file_from_base64,
+            get_file_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

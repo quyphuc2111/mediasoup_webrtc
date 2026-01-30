@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build-teacher:
-    name: Build Teacher App
+  build:
+    name: Build SmartlabPromax
     runs-on: windows-latest
 
     steps:
@@ -31,297 +31,78 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Install mediasoup-server dependencies
-        run: npm ci
-        working-directory: mediasoup-server
+      # Temporarily disabled - mediasoup server build
+      # - name: Install mediasoup-server dependencies
+      #   run: npm ci
+      #   working-directory: mediasoup-server
 
-      - name: Build mediasoup-server
-        run: npm run build
-        working-directory: mediasoup-server
+      # - name: Build mediasoup-server
+      #   run: npm run build
+      #   working-directory: mediasoup-server
 
-      - name: Download Node.js portable
-        shell: bash
-        run: |
-          # Retry logic for download
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES to download Node.js..."
-            if curl -L --connect-timeout 30 --max-time 300 --retry 3 --retry-delay 5 -o node.zip https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip; then
-              echo "Download successful!"
-              break
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                echo "Download failed, retrying in 10 seconds..."
-                sleep 10
-              else
-                echo "Download failed after $MAX_RETRIES attempts"
-                exit 1
-              fi
-            fi
-          done
-          
-          # Verify download
-          if [ ! -f node.zip ] || [ ! -s node.zip ]; then
-            echo "Error: node.zip is missing or empty"
-            exit 1
-          fi
-          
-          echo "Extracting Node.js..."
-          unzip -q node.zip
-          mkdir -p src-tauri/binaries/node
-          mv node-v20.18.0-win-x64/* src-tauri/binaries/node/
-          echo "Node.js extracted successfully"
+      # - name: Download Node.js portable
+      #   shell: bash
+      #   run: |
+      #     # Retry logic for download
+      #     MAX_RETRIES=3
+      #     RETRY_COUNT=0
+      #     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+      #       echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES to download Node.js..."
+      #       if curl -L --connect-timeout 30 --max-time 300 --retry 3 --retry-delay 5 -o node.zip https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip; then
+      #         echo "Download successful!"
+      #         break
+      #       else
+      #         RETRY_COUNT=$((RETRY_COUNT + 1))
+      #         if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+      #           echo "Download failed, retrying in 10 seconds..."
+      #           sleep 10
+      #         else
+      #           echo "Download failed after $MAX_RETRIES attempts"
+      #           exit 1
+      #         fi
+      #       fi
+      #     done
+      #     
+      #     # Verify download
+      #     if [ ! -f node.zip ] || [ ! -s node.zip ]; then
+      #       echo "Error: node.zip is missing or empty"
+      #       exit 1
+      #     fi
+      #     
+      #     echo "Extracting Node.js..."
+      #     unzip -q node.zip
+      #     mkdir -p src-tauri/binaries/node
+      #     mv node-v20.18.0-win-x64/* src-tauri/binaries/node/
+      #     echo "Node.js extracted successfully"
 
-      - name: Prepare sidecar
-        shell: bash
-        run: |
-          mkdir -p src-tauri/binaries/server
-          cp -r mediasoup-server/dist src-tauri/binaries/server/
-          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
-          cp mediasoup-server/package.json src-tauri/binaries/server/
+      # - name: Prepare sidecar
+      #   shell: bash
+      #   run: |
+      #     mkdir -p src-tauri/binaries/server
+      #     cp -r mediasoup-server/dist src-tauri/binaries/server/
+      #     cp -r mediasoup-server/node_modules src-tauri/binaries/server/
+      #     cp mediasoup-server/package.json src-tauri/binaries/server/
 
-      - name: Build Teacher App
+      - name: Build SmartlabPromax
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Screen Sharing ${{ github.ref_name }}'
+          releaseName: 'SmartlabPromax ${{ github.ref_name }}'
           releaseBody: |
-            ## Downloads
-            - **Screen Sharing Teacher**: Dành cho giáo viên (có server tích hợp)
-            - **Screen Sharing Student**: Dành cho học sinh (nhẹ, chỉ client)
-          releaseDraft: false
-          prerelease: false
-          args: --target x86_64-pc-windows-msvc --bundles nsis
-
-  build-student:
-    name: Build Student App
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build Student frontend
-        shell: bash
-        run: |
-          npx vite build --config vite.config.student.ts
-          mv dist-student/index-student.html dist-student/index.html
-
-      - name: Setup Student Tauri
-        shell: bash
-        run: |
-          # Update tauri.conf.json for student
-          cat > src-tauri/tauri.conf.json << 'CONF'
-          {
-            "$schema": "https://schema.tauri.app/config/2",
-            "productName": "Screen Sharing Student",
-            "version": "0.1.0",
-            "identifier": "com.zenadev.screensharing.student",
-            "build": {
-              "frontendDist": "../dist-student"
-            },
-            "app": {
-              "windows": [
-                {
-                  "title": "Screen Sharing - Học sinh",
-                  "width": 1024,
-                  "height": 768,
-                  "center": true
-                }
-              ],
-              "security": {
-                "csp": null
-              }
-            },
-            "bundle": {
-              "active": true,
-              "targets": ["nsis"],
-              "icon": [
-                "icons/32x32.png",
-                "icons/128x128.png",
-                "icons/128x128@2x.png",
-                "icons/icon.icns",
-                "icons/icon.ico"
-              ]
-            }
-          }
-          CONF
-
-          # Simplify lib.rs for student (no server, but keep UDP/LAN discovery commands)
-          cat > src-tauri/src/lib.rs << 'RUST'
-          use std::sync::Mutex;
-          use tauri::{State, Manager, AppHandle};
-          mod lan_discovery;
-          mod database;
-          use database::{init_database, SavedDevice};
-          use lan_discovery::{discover_devices, respond_to_discovery, DiscoveredDevice};
-          
-          #[derive(Default)]
-          pub struct DatabaseState {
-              conn: Mutex<Option<rusqlite::Connection>>,
-          }
-          
-          #[derive(Default)]
-          pub struct DiscoveryState {
-              listener_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
-              is_running: Mutex<bool>,
-          }
-          
-          #[tauri::command]
-          fn discover_lan_devices(port: u16, timeout_ms: u64) -> Result<Vec<DiscoveredDevice>, String> {
-              discover_devices(port, timeout_ms)
-          }
-          
-          #[tauri::command]
-          fn start_discovery_listener(
-              name: String,
-              port: u16,
-              state: State<DiscoveryState>,
-          ) -> Result<(), String> {
-              let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
-              if *is_running {
-                  return Ok(());
-              }
-              
-              let test_socket = std::net::UdpSocket::bind(format!("0.0.0.0:{}", port));
-              if test_socket.is_err() {
-                  return Err(format!("Port {} is already in use or not available", port));
-              }
-              drop(test_socket);
-              
-              let name_clone = name.clone();
-              let port_clone = port;
-              
-              let handle = std::thread::spawn(move || {
-                  let result = respond_to_discovery(&name_clone, port_clone);
-                  if let Err(e) = result {
-                      eprintln!("Discovery listener error: {}", e);
-                  }
-              });
-              
-              let mut handle_guard = state.listener_handle.lock().map_err(|e| e.to_string())?;
-              *handle_guard = Some(handle);
-              *is_running = true;
-              
-              Ok(())
-          }
-          
-          #[tauri::command]
-          fn stop_discovery_listener(state: State<DiscoveryState>) -> Result<(), String> {
-              let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
-              if !*is_running {
-                  return Ok(());
-              }
-              
-              let mut handle_guard = state.listener_handle.lock().map_err(|e| e.to_string())?;
-              if let Some(handle) = handle_guard.take() {
-                  drop(handle);
-              }
-              
-              *is_running = false;
-              Ok(())
-          }
-          
-          #[tauri::command]
-          fn init_db(app: AppHandle, state: State<DatabaseState>) -> Result<(), String> {
-              let conn = init_database(&app)
-                  .map_err(|e| format!("Failed to init database: {}", e))?;
-              
-              let mut db_state = state.conn.lock().map_err(|e| e.to_string())?;
-              *db_state = Some(conn);
-              
-              Ok(())
-          }
-          
-          #[tauri::command]
-          fn save_device_to_db(
-              ip: String,
-              name: String,
-              port: u16,
-              state: State<DatabaseState>,
-          ) -> Result<(), String> {
-              let db_state = state.conn.lock().map_err(|e| e.to_string())?;
-              if let Some(ref conn) = *db_state {
-                  database::save_device(conn, &database::SavedDevice {
-                      id: None,
-                      ip,
-                      name,
-                      port,
-                      last_used: std::time::SystemTime::now()
-                          .duration_since(std::time::UNIX_EPOCH)
-                          .unwrap()
-                          .as_secs(),
-                  }).map_err(|e| format!("Failed to save device: {}", e))?;
-              }
-              Ok(())
-          }
-          
-          #[tauri::command]
-          fn get_saved_devices(state: State<DatabaseState>) -> Result<Vec<SavedDevice>, String> {
-              let db_state = state.conn.lock().map_err(|e| e.to_string())?;
-              if let Some(ref conn) = *db_state {
-                  database::get_all_devices(conn)
-                      .map_err(|e| format!("Failed to get devices: {}", e))
-              } else {
-                  Ok(Vec::new())
-              }
-          }
-          
-          #[tauri::command]
-          fn remove_device_from_db(id: i64, state: State<DatabaseState>) -> Result<(), String> {
-              let db_state = state.conn.lock().map_err(|e| e.to_string())?;
-              if let Some(ref conn) = *db_state {
-                  database::delete_device(conn, id)
-                      .map_err(|e| format!("Failed to delete device: {}", e))?;
-              }
-              Ok(())
-          }
-          
-          #[cfg_attr(mobile, tauri::mobile_entry_point)]
-          pub fn run() {
-              tauri::Builder::default()
-                  .plugin(tauri_plugin_opener::init())
-                  .manage(DatabaseState::default())
-                  .manage(DiscoveryState::default())
-                  .invoke_handler(tauri::generate_handler![
-                      discover_lan_devices,
-                      start_discovery_listener,
-                      stop_discovery_listener,
-                      init_db,
-                      save_device_to_db,
-                      get_saved_devices,
-                      remove_device_from_db
-                  ])
-                  .run(tauri::generate_context!())
-                  .expect("error while running tauri application");
-          }
-          RUST
-
-      - name: Build Student App
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Screen Sharing ${{ github.ref_name }}'
+            ## SmartlabPromax - Phần mềm quản lý phòng máy
+            
+            ### Tính năng:
+            - 🖥️ Chia sẻ màn hình giáo viên
+            - 👁️ Xem màn hình học sinh
+            - 🖱️ Điều khiển từ xa
+            - 📤 Gửi/nhận file
+            - 🔐 Xác thực Ed25519 & LDAP
+            - 🌐 Tự động phát hiện LAN
+            
+            ### Cài đặt:
+            Tải file `.exe` và chạy để cài đặt.
           releaseDraft: false
           prerelease: false
           args: --target x86_64-pc-windows-msvc --bundles nsis

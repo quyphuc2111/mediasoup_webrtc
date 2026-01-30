@@ -37,6 +37,7 @@ interface StudentThumbnailProps {
   onConnect: () => void;
   onDisconnect: () => void;
   onRemoteControl?: () => void;  // Callback để mở chế độ điều khiển từ xa
+  onSendFile?: () => void;  // Callback để gửi file
 }
 
 export function StudentThumbnail({
@@ -47,6 +48,7 @@ export function StudentThumbnail({
   onConnect,
   onDisconnect,
   onRemoteControl,
+  onSendFile,
 }: StudentThumbnailProps) {
   const isConnected = student.status === 'Connected' || student.status === 'Viewing';
   const isConnecting = student.status === 'Connecting' || student.status === 'Authenticating';
@@ -88,6 +90,9 @@ export function StudentThumbnail({
       case 'remote-control':
         if (onRemoteControl && isViewing) onRemoteControl();
         break;
+      case 'send-file':
+        if (onSendFile && isConnected) onSendFile();
+        break;
       case 'connect':
         onConnect();
         break;
@@ -97,7 +102,7 @@ export function StudentThumbnail({
       default:
         break;
     }
-  }, [isConnected, isViewing, onClick, onConnect, onDisconnect, onRemoteControl]);
+  }, [isConnected, isViewing, onClick, onConnect, onDisconnect, onRemoteControl, onSendFile]);
 
   // Build context menu items based on connection status
   const contextMenuItems: ContextMenuItem[] = useMemo(() => {
@@ -116,6 +121,14 @@ export function StudentThumbnail({
         id: 'remote-control',
         label: 'Điều khiển từ xa',
         icon: '🖱️',
+      });
+    }
+
+    if (isConnected && onSendFile) {
+      items.push({
+        id: 'send-file',
+        label: 'Gửi file',
+        icon: '📤',
       });
     }
 
@@ -141,7 +154,7 @@ export function StudentThumbnail({
     }
 
     return items;
-  }, [isConnected, isViewing, isDisconnected, hasError, onRemoteControl]);
+  }, [isConnected, isViewing, isDisconnected, hasError, onRemoteControl, onSendFile]);
 
   return (
     <>

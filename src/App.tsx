@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { ScreenSharingPage } from './pages/ScreenSharingPage';
 import { ViewClientPage } from './pages/ViewClientPage';
+import { FileTransferPage } from './pages/FileTransferPage';
 import { StudentAgent } from './components/StudentAgent';
 import { AuthSettings } from './components/AuthSettings';
 import './App.css';
 
 // Define available pages
-type Page = 'home' | 'screen-sharing' | 'view-client' | 'student-agent' | 'auth-settings';
+type Page = 'home' | 'screen-sharing' | 'view-client' | 'student-agent' | 'auth-settings' | 'file-transfer';
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>('home');
@@ -23,6 +24,8 @@ function App() {
         return <ScreenSharingPage onBack={() => navigateTo('home')} />;
       case 'view-client':
         return <ViewClientPage onBack={() => navigateTo('home')} />;
+      case 'file-transfer':
+        return <FileTransferPage onBack={() => navigateTo('home')} />;
       case 'student-agent':
         return <StudentAgent onBack={() => navigateTo('home')} />;
       case 'auth-settings':
@@ -71,6 +74,8 @@ function App() {
                   <span className="page-desc">Xem màn hình học sinh</span>
                 </button>
 
+              
+
                 <button
                   onClick={() => navigateTo('student-agent')}
                   className="btn page-card student"
@@ -78,6 +83,15 @@ function App() {
                   <span className="page-icon">🎓</span>
                   <span className="page-title">Student Agent</span>
                   <span className="page-desc">Cho phép giáo viên xem màn hình</span>
+                </button>
+
+                  <button
+                  onClick={() => navigateTo('file-transfer')}
+                  className="btn page-card"
+                >
+                  <span className="page-icon">📁</span>
+                  <span className="page-title">File Transfer</span>
+                  <span className="page-desc">Gửi/nhận file với học sinh</span>
                 </button>
               </div>
             </div>

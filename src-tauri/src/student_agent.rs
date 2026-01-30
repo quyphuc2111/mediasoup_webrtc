@@ -120,6 +120,13 @@ pub enum TeacherMessage {
 
     #[serde(rename = "request_keyframe")]
     RequestKeyframe,
+
+    #[serde(rename = "send_file")]
+    SendFile {
+        file_name: String,
+        file_data: String,
+        file_size: u64,
+    },
 }
 
 /// Messages from student to teacher
@@ -155,6 +162,13 @@ pub enum StudentMessage {
 
     #[serde(rename = "pong")]
     Pong,
+
+    #[serde(rename = "file_received")]
+    FileReceived {
+        file_name: String,
+        success: bool,
+        message: String,
+    },
 
     #[serde(rename = "error")]
     Error { message: String },
@@ -646,6 +660,51 @@ where
                 }
             }
         }
+
+        TeacherMessage::SendFile {
+            file_name,
+            file_data,
+            file_size,
+        } => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            log::info!(
+                "[StudentAgent] Receiving file: {} ({} bytes) from {}",
+                file_name,
+                file_size,
+                addr
+            );
+
+            // Save file to Downloads folder
+            match save_received_file(&file_name, &file_data).await {
+                Ok(save_path) => {
+                    log::info!("[StudentAgent] File saved to: {}", save_path);
+                    let response = StudentMessage::FileReceived {
+                        file_name: file_name.clone(),
+                        success: true,
+                        message: format!("File saved to: {}", save_path),
+                    };
+                    send_message(write, &response).await?;
+                }
+                Err(e) => {
+                    log::error!("[StudentAgent] Failed to save file: {}", e);
+                    let response = StudentMessage::FileReceived {
+                        file_name: file_name.clone(),
+                        success: false,
+                        message: format!("Failed to save file: {}", e),
+                    };
+                    send_message(write, &response).await?;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -840,6 +899,51 @@ where
         .send(Message::Text(json))
         .await
         .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Save received file to Downloads folder
+async fn save_received_file(file_name: &str, file_data: &str) -> Result<String, String> {
+    use std::path::PathBuf;
+
+    // Get Downloads directory
+    let downloads_dir = dirs::download_dir()
+        .ok_or_else(|| "Failed to get Downloads directory".to_string())?;
+
+    // Create full path
+    let mut file_path = downloads_dir.join(file_name);
+
+    // If file exists, add number suffix
+    let mut counter = 1;
+    while file_path.exists() {
+        let path_buf = PathBuf::from(file_name);
+        let stem = path_buf
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file");
+        let ext = path_buf
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+
+        let new_name = if ext.is_empty() {
+            format!("{} ({})", stem, counter)
+        } else {
+            format!("{} ({}).{}", stem, counter, ext)
+        };
+
+        file_path = downloads_dir.join(new_name);
+        counter += 1;
+    }
+
+    // Decode base64 and write file
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, file_data)
+        .map_err(|e| format!("Failed to decode base64: {}", e))?;
+
+    tokio::fs::write(&file_path, bytes)
+        .await
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+
+    Ok(file_path.to_string_lossy().to_string())
 }
 
 /// Handle mouse input event from teacher

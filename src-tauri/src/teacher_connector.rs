@@ -70,6 +70,13 @@ pub enum StudentMessage {
     #[serde(rename = "pong")]
     Pong,
 
+    #[serde(rename = "file_received")]
+    FileReceived { 
+        file_name: String,
+        success: bool,
+        message: String,
+    },
+
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -145,6 +152,13 @@ pub enum TeacherMessage {
 
     #[serde(rename = "request_keyframe")]
     RequestKeyframe,
+
+    #[serde(rename = "send_file")]
+    SendFile {
+        file_name: String,
+        file_data: String, // Base64 encoded
+        file_size: u64,
+    },
 }
 
 /// Command to send to a connection handler
@@ -156,6 +170,11 @@ pub enum ConnectionCommand {
     SendMouseInput(MouseInputEvent),
     SendKeyboardInput(KeyboardInputEvent),
     SendTeacherMessage(TeacherMessage),
+    SendFile {
+        file_name: String,
+        file_data: String,
+        file_size: u64,
+    },
 }
 
 /// Screen frame data
@@ -678,6 +697,16 @@ async fn handle_connection(
                                         let json = serde_json::to_string(&msg).unwrap();
                                         let _ = write.send(Message::Text(json)).await;
                                     }
+                                    ConnectionCommand::SendFile { file_name, file_data, file_size } => {
+                                        log::info!("[TeacherConnector] Sending file: {} ({} bytes)", file_name, file_size);
+                                        let msg = TeacherMessage::SendFile {
+                                            file_name,
+                                            file_data,
+                                            file_size,
+                                        };
+                                        let json = serde_json::to_string(&msg).unwrap();
+                                        let _ = write.send(Message::Text(json)).await;
+                                    }
                                     ConnectionCommand::Disconnect => {
                                         log::info!("[TeacherConnector] Disconnect command received");
                                         let _ = write.close().await;
@@ -695,6 +724,16 @@ async fn handle_connection(
                     }
                     Some(ConnectionCommand::SendKeyboardInput(event)) => {
                         let msg = TeacherMessage::KeyboardInput { event };
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
+                    Some(ConnectionCommand::SendFile { file_name, file_data, file_size }) => {
+                        log::info!("[TeacherConnector] Sending file: {} ({} bytes)", file_name, file_size);
+                        let msg = TeacherMessage::SendFile {
+                            file_name,
+                            file_data,
+                            file_size,
+                        };
                         let json = serde_json::to_string(&msg).unwrap();
                         let _ = write.send(Message::Text(json)).await;
                     }
@@ -886,7 +925,32 @@ pub fn request_keyframe(state: &ConnectorState, id: &str) -> Result<(), String> 
             .try_send(ConnectionCommand::SendTeacherMessage(
                 TeacherMessage::RequestKeyframe,
             ))
-            .map_err(|e| format!("Failed to send keyframe request: {}", e))?;
+            .map_err(|e| format!("Failed to request keyframe: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Send file to student
+pub fn send_file(
+    state: &ConnectorState,
+    id: &str,
+    file_name: String,
+    file_data: String,
+    file_size: u64,
+) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendFile {
+                file_name,
+                file_data,
+                file_size,
+            })
+            .map_err(|e| format!("Failed to send file: {}", e))?;
     } else {
         return Err("Connection not found".to_string());
     }
