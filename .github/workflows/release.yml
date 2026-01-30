@@ -18,91 +18,74 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
+        shell: pwsh
+        run: |
+          # Check if Node.js is installed
+          $nodeVersion = node --version 2>$null
+          if ($nodeVersion) {
+            Write-Host "Node.js already installed: $nodeVersion"
+          } else {
+            Write-Host "Node.js not found, please install Node.js 20+ on the runner"
+            exit 1
+          }
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
+      - name: Setup Rust
+        shell: pwsh
+        run: |
+          # Check if Rust is installed
+          $rustVersion = rustc --version 2>$null
+          if ($rustVersion) {
+            Write-Host "Rust already installed: $rustVersion"
+          } else {
+            Write-Host "Rust not found, please install Rust on the runner"
+            exit 1
+          }
+          
+          # Add Windows MSVC target if not present
+          rustup target add x86_64-pc-windows-msvc 2>$null
+          
+          # Show installed targets
+          rustup target list --installed
 
       - name: Install frontend dependencies
+        shell: pwsh
         run: npm ci
 
-      # Temporarily disabled - mediasoup server build
-      # - name: Install mediasoup-server dependencies
-      #   run: npm ci
-      #   working-directory: mediasoup-server
-
-      # - name: Build mediasoup-server
-      #   run: npm run build
-      #   working-directory: mediasoup-server
-
-      # - name: Download Node.js portable
-      #   shell: bash
-      #   run: |
-      #     # Retry logic for download
-      #     MAX_RETRIES=3
-      #     RETRY_COUNT=0
-      #     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-      #       echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES to download Node.js..."
-      #       if curl -L --connect-timeout 30 --max-time 300 --retry 3 --retry-delay 5 -o node.zip https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip; then
-      #         echo "Download successful!"
-      #         break
-      #       else
-      #         RETRY_COUNT=$((RETRY_COUNT + 1))
-      #         if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-      #           echo "Download failed, retrying in 10 seconds..."
-      #           sleep 10
-      #         else
-      #           echo "Download failed after $MAX_RETRIES attempts"
-      #           exit 1
-      #         fi
-      #       fi
-      #     done
-      #     
-      #     # Verify download
-      #     if [ ! -f node.zip ] || [ ! -s node.zip ]; then
-      #       echo "Error: node.zip is missing or empty"
-      #       exit 1
-      #     fi
-      #     
-      #     echo "Extracting Node.js..."
-      #     unzip -q node.zip
-      #     mkdir -p src-tauri/binaries/node
-      #     mv node-v20.18.0-win-x64/* src-tauri/binaries/node/
-      #     echo "Node.js extracted successfully"
-
-      # - name: Prepare sidecar
-      #   shell: bash
-      #   run: |
-      #     mkdir -p src-tauri/binaries/server
-      #     cp -r mediasoup-server/dist src-tauri/binaries/server/
-      #     cp -r mediasoup-server/node_modules src-tauri/binaries/server/
-      #     cp mediasoup-server/package.json src-tauri/binaries/server/
-
-      - name: Build SmartlabPromax
-        uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri App
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm run tauri build -- --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name }}'
-          releaseBody: |
+          name: SmartlabPromax-windows
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: 'SmartlabPromax ${{ github.ref_name }}'
+          body: |
             ## SmartlabPromax - Phần mềm quản lý phòng máy
             
             ### Tính năng:
             - 🖥️ Chia sẻ màn hình giáo viên
             - 👁️ Xem màn hình học sinh
             - 🖱️ Điều khiển từ xa
-            - 📤 Gửi/nhận file
+            - 📤 Gửi/nhận file (chunked TCP)
+            - 📂 File Manager 2 panel
             - 🔐 Xác thực Ed25519 & LDAP
             - 🌐 Tự động phát hiện LAN
             
             ### Cài đặt:
             Tải file `.exe` và chạy để cài đặt.
-          releaseDraft: false
+          files: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          draft: false
           prerelease: false
-          args: --target x86_64-pc-windows-msvc --bundles nsis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
