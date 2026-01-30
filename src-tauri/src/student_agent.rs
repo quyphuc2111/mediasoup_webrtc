@@ -127,6 +127,11 @@ pub enum TeacherMessage {
         file_data: String,
         file_size: u64,
     },
+
+    #[serde(rename = "list_directory")]
+    ListDirectory {
+        path: String,
+    },
 }
 
 /// Messages from student to teacher
@@ -168,6 +173,12 @@ pub enum StudentMessage {
         file_name: String,
         success: bool,
         message: String,
+    },
+
+    #[serde(rename = "directory_listing")]
+    DirectoryListing {
+        path: String,
+        files: Vec<crate::file_transfer::FileInfo>,
     },
 
     #[serde(rename = "error")]
@@ -706,6 +717,46 @@ where
                         file_name: file_name.clone(),
                         success: false,
                         message: format!("Failed to save file: {}", e),
+                    };
+                    send_message(write, &response).await?;
+                }
+            }
+        }
+
+        TeacherMessage::ListDirectory { path } => {
+            // Check if authenticated
+            let authenticated = {
+                let conns = state.connections.lock().unwrap();
+                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
+            };
+
+            if !authenticated {
+                return Err("Not authenticated".to_string());
+            }
+
+            log::info!("[StudentAgent] Listing directory: {}", path);
+
+            // If path is empty, use Downloads directory
+            let target_path = if path.is_empty() {
+                dirs::download_dir()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "/".to_string())
+            } else {
+                path.clone()
+            };
+
+            match crate::file_transfer::list_directory(&target_path) {
+                Ok(files) => {
+                    let response = StudentMessage::DirectoryListing {
+                        path: target_path,
+                        files,
+                    };
+                    send_message(write, &response).await?;
+                }
+                Err(e) => {
+                    log::error!("[StudentAgent] Failed to list directory: {}", e);
+                    let response = StudentMessage::Error {
+                        message: format!("Failed to list directory: {}", e),
                     };
                     send_message(write, &response).await?;
                 }

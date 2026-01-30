@@ -6,6 +6,7 @@ import { StudentThumbnail } from '../components/StudentThumbnail';
 import { StudentFullView } from '../components/StudentFullView';
 import { KeyManager } from '../components/KeyManager';
 import { DebugPanel } from '../components/DebugPanel';
+import { FileManager } from '../components/FileManager';
 
 type ConnectionStatus =
   | 'Disconnected'
@@ -80,6 +81,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
   const [isScanning, setIsScanning] = useState(false);
   const [dbInitialized, setDbInitialized] = useState(false);
   const [fileTransfers, setFileTransfers] = useState<Record<string, FileTransferProgress>>({});
+  const [fileManagerStudent, setFileManagerStudent] = useState<string | null>(null);
 
   // Initialize database and load saved devices
   useEffect(() => {
@@ -313,7 +315,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       return;
     }
 
-    // Open file picker dialog
+    // Open file picker dialog (allow both file and folder)
     const filePath = await open({
       multiple: false,
       directory: false,
@@ -353,6 +355,45 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
       console.error('Failed to send file:', err);
     }
   }, [connections]);
+
+  const sendFolderToStudent = useCallback(async (studentId: string) => {
+    const student = connections.find(c => c.id === studentId);
+    if (!student) {
+      setError('Không tìm thấy học sinh');
+      return;
+    }
+
+    // Open folder picker dialog
+    const folderPath = await open({
+      multiple: false,
+      directory: true,
+      title: `Gửi folder cho ${student.name || student.ip}`,
+    });
+
+    if (!folderPath) {
+      return; // User cancelled
+    }
+
+    try {
+      console.log(`[FileTransfer] Starting folder transfer: "${folderPath}" to ${student.name || student.ip}`);
+      
+      // Start chunked TCP transfer (non-blocking) - same command handles both file and folder
+      const jobId = await invoke<string>('send_file_to_student', {
+        studentId: studentId,
+        filePath: folderPath,
+      });
+      
+      console.log(`[FileTransfer] Folder transfer job started: ${jobId}`);
+      
+    } catch (err) {
+      setError(`Lỗi khi gửi folder: ${err}`);
+      console.error('Failed to send folder:', err);
+    }
+  }, [connections]);
+
+  const openFileManager = useCallback((studentId: string) => {
+    setFileManagerStudent(studentId);
+  }, []);
 
   const cancelFileTransfer = useCallback(async (jobId: string) => {
     try {
@@ -589,6 +630,8 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
                   }
                 }}
                 onSendFile={() => sendFileToStudent(conn.id)}
+                onSendFolder={() => sendFolderToStudent(conn.id)}
+                onOpenFileManager={() => openFileManager(conn.id)}
               />
             ))}
 
@@ -679,6 +722,18 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
 
       {/* Debug Panel */}
       <DebugPanel />
+
+      {/* File Manager Modal */}
+      {fileManagerStudent && (() => {
+        const student = connections.find(c => c.id === fileManagerStudent);
+        if (!student) return null;
+        return (
+          <FileManager
+            student={student}
+            onClose={() => setFileManagerStudent(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

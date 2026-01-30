@@ -1178,6 +1178,16 @@ fn get_file_info(path: String) -> Result<file_transfer::FileInfo, String> {
     file_transfer::get_file_info(&path)
 }
 
+/// Get student's directory listing
+#[tauri::command]
+async fn get_student_directory(
+    student_id: String,
+    path: String,
+    state: State<'_, Arc<ConnectorState>>,
+) -> Result<Vec<file_transfer::FileInfo>, String> {
+    teacher_connector::list_student_directory(&state, &student_id, path).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1257,7 +1267,8 @@ pub fn run() {
             get_documents_directory,
             read_file_as_base64,
             write_file_from_base64,
-            get_file_info
+            get_file_info,
+            get_student_directory
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

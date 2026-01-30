@@ -38,6 +38,8 @@ interface StudentThumbnailProps {
   onDisconnect: () => void;
   onRemoteControl?: () => void;  // Callback để mở chế độ điều khiển từ xa
   onSendFile?: () => void;  // Callback để gửi file
+  onSendFolder?: () => void;  // Callback để gửi folder
+  onOpenFileManager?: () => void;  // Callback để mở File Manager
 }
 
 export function StudentThumbnail({
@@ -49,6 +51,8 @@ export function StudentThumbnail({
   onDisconnect,
   onRemoteControl,
   onSendFile,
+  onSendFolder,
+  onOpenFileManager,
 }: StudentThumbnailProps) {
   const isConnected = student.status === 'Connected' || student.status === 'Viewing';
   const isConnecting = student.status === 'Connecting' || student.status === 'Authenticating';
@@ -93,6 +97,12 @@ export function StudentThumbnail({
       case 'send-file':
         if (onSendFile && isConnected) onSendFile();
         break;
+      case 'send-folder':
+        if (onSendFolder && isConnected) onSendFolder();
+        break;
+      case 'file-manager':
+        if (onOpenFileManager && isConnected) onOpenFileManager();
+        break;
       case 'connect':
         onConnect();
         break;
@@ -102,7 +112,7 @@ export function StudentThumbnail({
       default:
         break;
     }
-  }, [isConnected, isViewing, onClick, onConnect, onDisconnect, onRemoteControl, onSendFile]);
+  }, [isConnected, isViewing, onClick, onConnect, onDisconnect, onRemoteControl, onSendFile, onSendFolder, onOpenFileManager]);
 
   // Build context menu items based on connection status
   const contextMenuItems: ContextMenuItem[] = useMemo(() => {
@@ -128,7 +138,23 @@ export function StudentThumbnail({
       items.push({
         id: 'send-file',
         label: 'Gửi file',
-        icon: '📤',
+        icon: '📄',
+      });
+    }
+
+    if (isConnected && onSendFolder) {
+      items.push({
+        id: 'send-folder',
+        label: 'Gửi folder',
+        icon: '📁',
+      });
+    }
+
+    if (isConnected && onOpenFileManager) {
+      items.push({
+        id: 'file-manager',
+        label: 'Quản lý File',
+        icon: '📂',
       });
     }
 
@@ -154,7 +180,7 @@ export function StudentThumbnail({
     }
 
     return items;
-  }, [isConnected, isViewing, isDisconnected, hasError, onRemoteControl, onSendFile]);
+  }, [isConnected, isViewing, isDisconnected, hasError, onRemoteControl, onSendFile, onSendFolder, onOpenFileManager]);
 
   return (
     <>

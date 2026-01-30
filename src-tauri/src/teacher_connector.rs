@@ -77,6 +77,12 @@ pub enum StudentMessage {
         message: String,
     },
 
+    #[serde(rename = "directory_listing")]
+    DirectoryListing {
+        path: String,
+        files: Vec<crate::file_transfer::FileInfo>,
+    },
+
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -159,6 +165,11 @@ pub enum TeacherMessage {
         file_data: String, // Base64 encoded
         file_size: u64,
     },
+
+    #[serde(rename = "list_directory")]
+    ListDirectory {
+        path: String,
+    },
 }
 
 /// Command to send to a connection handler
@@ -174,6 +185,9 @@ pub enum ConnectionCommand {
         file_name: String,
         file_data: String,
         file_size: u64,
+    },
+    ListDirectory {
+        path: String,
     },
 }
 
@@ -200,6 +214,7 @@ pub struct ConnectorState {
     pub screen_frames: Mutex<HashMap<String, ScreenFrame>>,
     pub screen_sizes: Mutex<HashMap<String, (u32, u32)>>,
     pub decoders: Mutex<HashMap<String, crate::h264_decoder::H264Decoder>>,
+    pub directory_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<Vec<crate::file_transfer::FileInfo>, String>>>>,
 }
 
 impl Default for ConnectorState {
@@ -210,6 +225,7 @@ impl Default for ConnectorState {
             screen_frames: Mutex::new(HashMap::new()),
             screen_sizes: Mutex::new(HashMap::new()),
             decoders: Mutex::new(HashMap::new()),
+            directory_responses: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -716,6 +732,12 @@ async fn handle_connection(
                                         let json = serde_json::to_string(&msg).unwrap();
                                         let _ = write.send(Message::Text(json)).await;
                                     }
+                                    ConnectionCommand::ListDirectory { path } => {
+                                        log::info!("[TeacherConnector] Requesting directory listing: {}", path);
+                                        let msg = TeacherMessage::ListDirectory { path };
+                                        let json = serde_json::to_string(&msg).unwrap();
+                                        let _ = write.send(Message::Text(json)).await;
+                                    }
                                     ConnectionCommand::Disconnect => {
                                         log::info!("[TeacherConnector] Disconnect command received");
                                         let _ = write.close().await;
@@ -743,6 +765,12 @@ async fn handle_connection(
                             file_data,
                             file_size,
                         };
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
+                    Some(ConnectionCommand::ListDirectory { path }) => {
+                        log::info!("[TeacherConnector] Requesting directory listing: {}", path);
+                        let msg = TeacherMessage::ListDirectory { path };
                         let json = serde_json::to_string(&msg).unwrap();
                         let _ = write.send(Message::Text(json)).await;
                     }
@@ -828,6 +856,18 @@ async fn handle_student_message(
         }
         StudentMessage::Pong => {
             // Keep-alive response
+        }
+        StudentMessage::DirectoryListing { path: _, files } => {
+            log::info!("[TeacherConnector] Received directory listing with {} files", files.len());
+            // Send response to waiting request
+            if let Ok(mut responses) = state.directory_responses.lock() {
+                if let Some(sender) = responses.remove(id) {
+                    let _ = sender.send(Ok(files));
+                }
+            }
+        }
+        StudentMessage::FileReceived { file_name, success, message } => {
+            log::info!("[TeacherConnector] File received response: {} - {} - {}", file_name, success, message);
         }
         _ => {
             println!("[TeacherConnector] Unexpected message: {:?}", msg);
@@ -965,6 +1005,51 @@ pub fn send_file(
     }
 
     Ok(())
+}
+
+/// Request directory listing from student
+pub async fn list_student_directory(
+    state: &ConnectorState,
+    id: &str,
+    path: String,
+) -> Result<Vec<crate::file_transfer::FileInfo>, String> {
+    // Create oneshot channel for response
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    // Store the sender
+    {
+        let mut responses = state.directory_responses.lock().map_err(|e| e.to_string())?;
+        responses.insert(id.to_string(), tx);
+    }
+
+    // Send the request
+    {
+        let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+        if let Some(sender) = senders.get(id) {
+            sender
+                .try_send(ConnectionCommand::ListDirectory { path })
+                .map_err(|e| format!("Failed to send command: {}", e))?;
+        } else {
+            // Remove the pending response
+            if let Ok(mut responses) = state.directory_responses.lock() {
+                responses.remove(id);
+            }
+            return Err("Connection not found".to_string());
+        }
+    }
+
+    // Wait for response with timeout
+    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("Response channel closed".to_string()),
+        Err(_) => {
+            // Remove the pending response on timeout
+            if let Ok(mut responses) = state.directory_responses.lock() {
+                responses.remove(id);
+            }
+            Err("Request timed out".to_string())
+        }
+    }
 }
 
 #[cfg(test)]

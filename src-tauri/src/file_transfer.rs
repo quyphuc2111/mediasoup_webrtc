@@ -183,7 +183,35 @@ impl FileTransferState {
     }
 }
 
-/// Send a file to student via dedicated TCP connection
+/// Collect all files in a directory recursively
+fn collect_files_in_directory(dir_path: &PathBuf, base_path: &PathBuf) -> Result<Vec<(PathBuf, String)>, String> {
+    let mut files = Vec::new();
+    
+    let entries = std::fs::read_dir(dir_path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?;
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let path = entry.path();
+        
+        if path.is_dir() {
+            // Recursively collect files from subdirectory
+            let sub_files = collect_files_in_directory(&path, base_path)?;
+            files.extend(sub_files);
+        } else {
+            // Get relative path from base directory
+            let relative_path = path.strip_prefix(base_path)
+                .map_err(|_| "Failed to get relative path")?
+                .to_string_lossy()
+                .to_string();
+            files.push((path, relative_path));
+        }
+    }
+    
+    Ok(files)
+}
+
+/// Send a file or folder to student via dedicated TCP connection
 pub async fn send_file_chunked(
     state: Arc<FileTransferState>,
     app_handle: AppHandle,
@@ -192,13 +220,17 @@ pub async fn send_file_chunked(
     file_path: String,
     student_id: String,
 ) -> Result<String, String> {
-    // Generate job ID
-    let job_id = format!("send-{}-{}", student_id, chrono::Utc::now().timestamp_millis());
-
-    // Get file info
     let path = PathBuf::from(&file_path);
     let metadata = std::fs::metadata(&path)
         .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    
+    // Check if it's a directory
+    if metadata.is_dir() {
+        return send_folder_chunked(state, app_handle, student_ip, student_port, file_path, student_id).await;
+    }
+    
+    // Generate job ID
+    let job_id = format!("send-{}-{}", student_id, chrono::Utc::now().timestamp_millis());
     
     let file_name = path
         .file_name()
@@ -369,6 +401,218 @@ async fn send_file_task(
     Ok(())
 }
 
+/// Send a folder to student (sends all files with relative paths)
+async fn send_folder_chunked(
+    state: Arc<FileTransferState>,
+    app_handle: AppHandle,
+    student_ip: String,
+    student_port: u16,
+    folder_path: String,
+    student_id: String,
+) -> Result<String, String> {
+    let path = PathBuf::from(&folder_path);
+    let folder_name = path
+        .file_name()
+        .ok_or("Invalid folder path")?
+        .to_string_lossy()
+        .to_string();
+
+    // Collect all files in the folder
+    let files = collect_files_in_directory(&path, &path)?;
+    
+    if files.is_empty() {
+        return Err("Folder is empty".to_string());
+    }
+
+    // Calculate total size
+    let total_size: u64 = files.iter()
+        .map(|(p, _)| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
+
+    // Generate job ID for the folder transfer
+    let job_id = format!("folder-{}-{}", student_id, chrono::Utc::now().timestamp_millis());
+
+    // Create job
+    let job = FileTransferJob {
+        id: job_id.clone(),
+        file_name: format!("📁 {} ({} files)", folder_name, files.len()),
+        file_size: total_size,
+        transferred: 0,
+        status: TransferStatus::Pending,
+        direction: TransferDirection::Send,
+        student_id: student_id.clone(),
+        progress: 0.0,
+    };
+    state.add_job(job);
+    emit_progress(&app_handle, &state, &job_id);
+
+    // Calculate file transfer port
+    let transfer_port = student_port + FILE_TRANSFER_PORT_OFFSET;
+
+    // Clone for async task
+    let state_clone = Arc::clone(&state);
+    let app_clone = app_handle.clone();
+    let job_id_clone = job_id.clone();
+
+    // Spawn async task for non-blocking transfer
+    tokio::spawn(async move {
+        let result = send_folder_task(
+            state_clone.clone(),
+            app_clone.clone(),
+            student_ip,
+            transfer_port,
+            folder_name,
+            files,
+            total_size,
+            job_id_clone.clone(),
+        ).await;
+
+        if let Err(e) = result {
+            log::error!("[FileTransfer] Folder send failed: {}", e);
+            state_clone.update_job(&job_id_clone, 0, TransferStatus::Failed { error: e });
+            emit_progress(&app_clone, &state_clone, &job_id_clone);
+        }
+    });
+
+    Ok(job_id)
+}
+
+/// Internal task to send folder
+async fn send_folder_task(
+    state: Arc<FileTransferState>,
+    app_handle: AppHandle,
+    student_ip: String,
+    transfer_port: u16,
+    folder_name: String,
+    files: Vec<(PathBuf, String)>,
+    total_size: u64,
+    job_id: String,
+) -> Result<(), String> {
+    // Update status to connecting
+    state.update_job(&job_id, 0, TransferStatus::Connecting);
+    emit_progress(&app_handle, &state, &job_id);
+
+    // Connect to student's file transfer port
+    let addr = format!("{}:{}", student_ip, transfer_port);
+    log::info!("[FileTransfer] Connecting to {} for folder transfer", addr);
+
+    let mut stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| format!("Failed to connect to {}: {}", addr, e))?;
+
+    log::info!("[FileTransfer] Connected to {}", addr);
+
+    let mut total_transferred: u64 = 0;
+    let mut last_progress_emit = std::time::Instant::now();
+
+    // Send each file
+    for (file_path, relative_path) in &files {
+        // Check for cancellation
+        if state.is_cancelled(&job_id) {
+            let cancel_msg = FileTransferMessage::Cancel { job_id: job_id.clone() };
+            let _ = send_message(&mut stream, &cancel_msg).await;
+            state.update_job(&job_id, total_transferred, TransferStatus::Cancelled);
+            emit_progress(&app_handle, &state, &job_id);
+            return Ok(());
+        }
+
+        let file_metadata = std::fs::metadata(file_path)
+            .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+        let file_size = file_metadata.len();
+
+        // Construct destination path: folder_name/relative_path
+        let dest_path = format!("{}/{}", folder_name, relative_path);
+
+        // Send init message for this file
+        let init_msg = FileTransferMessage::Init {
+            job_id: job_id.clone(),
+            file_name: dest_path.clone(),
+            file_size,
+        };
+        send_message(&mut stream, &init_msg).await?;
+
+        // Wait for ack
+        let ack = receive_message(&mut stream).await?;
+        match ack {
+            FileTransferMessage::Ack { ready: true, .. } => {}
+            FileTransferMessage::Ack { ready: false, .. } => {
+                return Err(format!("Receiver not ready for file: {}", dest_path));
+            }
+            FileTransferMessage::Error { message, .. } => {
+                return Err(format!("Receiver error for {}: {}", dest_path, message));
+            }
+            _ => {
+                return Err("Unexpected response".to_string());
+            }
+        }
+
+        // Update status to transferring
+        state.update_job(&job_id, total_transferred, TransferStatus::Transferring);
+        emit_progress(&app_handle, &state, &job_id);
+
+        // Open file and send chunks
+        let mut file = tokio::fs::File::open(file_path)
+            .await
+            .map_err(|e| format!("Failed to open file {}: {}", file_path.display(), e))?;
+
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+        let mut file_offset: u64 = 0;
+
+        loop {
+            // Check for cancellation
+            if state.is_cancelled(&job_id) {
+                let cancel_msg = FileTransferMessage::Cancel { job_id: job_id.clone() };
+                let _ = send_message(&mut stream, &cancel_msg).await;
+                state.update_job(&job_id, total_transferred, TransferStatus::Cancelled);
+                emit_progress(&app_handle, &state, &job_id);
+                return Ok(());
+            }
+
+            // Read chunk from file
+            let bytes_read = file.read(&mut buffer)
+                .await
+                .map_err(|e| format!("Failed to read file: {}", e))?;
+
+            if bytes_read == 0 {
+                break; // EOF
+            }
+
+            // Send chunk
+            let chunk_msg = FileTransferMessage::Chunk {
+                job_id: job_id.clone(),
+                offset: file_offset,
+                data: buffer[..bytes_read].to_vec(),
+            };
+            send_message(&mut stream, &chunk_msg).await?;
+
+            file_offset += bytes_read as u64;
+            total_transferred += bytes_read as u64;
+
+            // Update progress (throttle to every 100ms)
+            if last_progress_emit.elapsed().as_millis() >= 100 {
+                state.update_job(&job_id, total_transferred, TransferStatus::Transferring);
+                emit_progress(&app_handle, &state, &job_id);
+                last_progress_emit = std::time::Instant::now();
+            }
+        }
+
+        // Send complete message for this file
+        let complete_msg = FileTransferMessage::Complete { job_id: job_id.clone() };
+        send_message(&mut stream, &complete_msg).await?;
+
+        log::info!("[FileTransfer] File in folder completed: {}", dest_path);
+    }
+
+    // Update final status
+    state.update_job(&job_id, total_size, TransferStatus::Completed);
+    emit_progress(&app_handle, &state, &job_id);
+
+    log::info!("[FileTransfer] Folder transfer completed: {} ({} files, {} bytes)", 
+        folder_name, files.len(), total_size);
+
+    Ok(())
+}
+
 /// Start file transfer listener on student side
 pub async fn start_file_receiver(
     state: Arc<FileTransferState>,
@@ -425,132 +669,231 @@ pub async fn start_file_receiver(
     Ok(transfer_port)
 }
 
-/// Handle incoming file transfer on student side
+/// Handle incoming file transfer on student side (supports both single file and folder)
 async fn handle_incoming_transfer(
     state: Arc<FileTransferState>,
     app_handle: AppHandle,
     mut stream: TcpStream,
 ) -> Result<(), String> {
-    // Receive init message
-    let init_msg = receive_message(&mut stream).await?;
-
-    let (job_id, file_name, file_size) = match init_msg {
-        FileTransferMessage::Init { job_id, file_name, file_size } => {
-            (job_id, file_name, file_size)
-        }
-        _ => {
-            return Err("Expected init message".to_string());
-        }
-    };
-
-    log::info!("[FileTransfer] Receiving file: {} ({} bytes)", file_name, file_size);
-
-    // Create job
-    let job = FileTransferJob {
-        id: job_id.clone(),
-        file_name: file_name.clone(),
-        file_size,
-        transferred: 0,
-        status: TransferStatus::Pending,
-        direction: TransferDirection::Receive,
-        student_id: "local".to_string(),
-        progress: 0.0,
-    };
-    state.add_job(job);
-    emit_progress(&app_handle, &state, &job_id);
-
     // Get Downloads directory
     let downloads_dir = dirs::download_dir()
         .ok_or_else(|| "Failed to get Downloads directory".to_string())?;
 
-    // Create unique file path
-    let mut file_path = downloads_dir.join(&file_name);
-    let mut counter = 1;
-    while file_path.exists() {
-        let stem = PathBuf::from(&file_name)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("file")
-            .to_string();
-        let ext = PathBuf::from(&file_name)
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        let new_name = if ext.is_empty() {
-            format!("{} ({})", stem, counter)
-        } else {
-            format!("{} ({}).{}", stem, counter, ext)
-        };
-        file_path = downloads_dir.join(new_name);
-        counter += 1;
-    }
-
-    // Send ack
-    let ack_msg = FileTransferMessage::Ack {
-        job_id: job_id.clone(),
-        ready: true,
-    };
-    send_message(&mut stream, &ack_msg).await?;
-
-    // Update status
-    state.update_job(&job_id, 0, TransferStatus::Transferring);
-    emit_progress(&app_handle, &state, &job_id);
-
-    // Create file
-    let mut file = tokio::fs::File::create(&file_path)
-        .await
-        .map_err(|e| format!("Failed to create file: {}", e))?;
-
-    let mut received: u64 = 0;
+    let mut total_received: u64 = 0;
+    let mut total_size: u64 = 0;
+    let mut file_count = 0;
+    let mut job_id: Option<String> = None;
+    let mut is_folder_transfer = false;
     let mut last_progress_emit = std::time::Instant::now();
 
-    // Receive chunks
     loop {
-        let msg = receive_message(&mut stream).await?;
+        // Receive message (Init for new file, or end of connection)
+        let msg = match receive_message(&mut stream).await {
+            Ok(m) => m,
+            Err(e) => {
+                if e.contains("Failed to read length") {
+                    // Connection closed normally after folder transfer
+                    break;
+                }
+                return Err(e);
+            }
+        };
 
         match msg {
-            FileTransferMessage::Chunk { data, .. } => {
-                file.write_all(&data)
-                    .await
-                    .map_err(|e| format!("Failed to write chunk: {}", e))?;
+            FileTransferMessage::Init { job_id: jid, file_name, file_size } => {
+                log::info!("[FileTransfer] Receiving file: {} ({} bytes)", file_name, file_size);
 
-                received += data.len() as u64;
+                // Check if this is a folder transfer (path contains /)
+                is_folder_transfer = file_name.contains('/') || file_name.contains('\\');
+                
+                // First file - create job
+                if job_id.is_none() {
+                    job_id = Some(jid.clone());
+                    
+                    let display_name = if is_folder_transfer {
+                        // Extract folder name from path
+                        let folder_name = file_name.split('/').next()
+                            .or_else(|| file_name.split('\\').next())
+                            .unwrap_or(&file_name);
+                        format!("📁 {}", folder_name)
+                    } else {
+                        file_name.clone()
+                    };
 
-                // Update progress (throttle to every 100ms)
-                if last_progress_emit.elapsed().as_millis() >= 100 {
-                    state.update_job(&job_id, received, TransferStatus::Transferring);
-                    emit_progress(&app_handle, &state, &job_id);
-                    last_progress_emit = std::time::Instant::now();
+                    let job = FileTransferJob {
+                        id: jid.clone(),
+                        file_name: display_name,
+                        file_size,
+                        transferred: 0,
+                        status: TransferStatus::Pending,
+                        direction: TransferDirection::Receive,
+                        student_id: "local".to_string(),
+                        progress: 0.0,
+                    };
+                    state.add_job(job);
                 }
-            }
-            FileTransferMessage::Complete { .. } => {
-                log::info!("[FileTransfer] Transfer complete: {}", file_path.display());
-                state.update_job(&job_id, file_size, TransferStatus::Completed);
-                emit_progress(&app_handle, &state, &job_id);
-                break;
+
+                // For folder transfer, accumulate total size
+                if is_folder_transfer {
+                    total_size += file_size;
+                    // Update job with new total size
+                    if let Some(ref jid) = job_id {
+                        if let Ok(mut jobs) = state.jobs.lock() {
+                            if let Some(job) = jobs.get_mut(jid) {
+                                job.file_size = total_size;
+                            }
+                        }
+                    }
+                } else {
+                    total_size = file_size;
+                }
+
+                emit_progress(&app_handle, &state, job_id.as_ref().unwrap());
+
+                // Create file path (handle subdirectories for folder transfer)
+                let file_path = if is_folder_transfer {
+                    let relative_path = downloads_dir.join(&file_name);
+                    // Create parent directories
+                    if let Some(parent) = relative_path.parent() {
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .map_err(|e| format!("Failed to create directories: {}", e))?;
+                    }
+                    relative_path
+                } else {
+                    // Single file - handle duplicates
+                    let mut file_path = downloads_dir.join(&file_name);
+                    let mut counter = 1;
+                    while file_path.exists() {
+                        let stem = PathBuf::from(&file_name)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("file")
+                            .to_string();
+                        let ext = PathBuf::from(&file_name)
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        let new_name = if ext.is_empty() {
+                            format!("{} ({})", stem, counter)
+                        } else {
+                            format!("{} ({}).{}", stem, counter, ext)
+                        };
+                        file_path = downloads_dir.join(new_name);
+                        counter += 1;
+                    }
+                    file_path
+                };
+
+                // Send ack
+                let ack_msg = FileTransferMessage::Ack {
+                    job_id: job_id.clone().unwrap(),
+                    ready: true,
+                };
+                send_message(&mut stream, &ack_msg).await?;
+
+                // Update status
+                if let Some(ref jid) = job_id {
+                    state.update_job(jid, total_received, TransferStatus::Transferring);
+                    emit_progress(&app_handle, &state, jid);
+                }
+
+                // Create file
+                let mut file = tokio::fs::File::create(&file_path)
+                    .await
+                    .map_err(|e| format!("Failed to create file: {}", e))?;
+
+                // Receive chunks for this file
+                loop {
+                    let chunk_msg = receive_message(&mut stream).await?;
+
+                    match chunk_msg {
+                        FileTransferMessage::Chunk { data, .. } => {
+                            file.write_all(&data)
+                                .await
+                                .map_err(|e| format!("Failed to write chunk: {}", e))?;
+
+                            total_received += data.len() as u64;
+
+                            // Update progress (throttle to every 100ms)
+                            if last_progress_emit.elapsed().as_millis() >= 100 {
+                                if let Some(ref jid) = job_id {
+                                    state.update_job(jid, total_received, TransferStatus::Transferring);
+                                    emit_progress(&app_handle, &state, jid);
+                                }
+                                last_progress_emit = std::time::Instant::now();
+                            }
+                        }
+                        FileTransferMessage::Complete { .. } => {
+                            file_count += 1;
+                            log::info!("[FileTransfer] File {} complete: {}", file_count, file_path.display());
+                            
+                            // For single file, we're done
+                            if !is_folder_transfer {
+                                if let Some(ref jid) = job_id {
+                                    state.update_job(jid, total_size, TransferStatus::Completed);
+                                    emit_progress(&app_handle, &state, jid);
+                                }
+                                return Ok(());
+                            }
+                            // For folder, break inner loop to receive next file
+                            break;
+                        }
+                        FileTransferMessage::Cancel { .. } => {
+                            log::info!("[FileTransfer] Transfer cancelled");
+                            if let Some(ref jid) = job_id {
+                                state.update_job(jid, total_received, TransferStatus::Cancelled);
+                                emit_progress(&app_handle, &state, jid);
+                            }
+                            let _ = tokio::fs::remove_file(&file_path).await;
+                            return Ok(());
+                        }
+                        FileTransferMessage::Error { message, .. } => {
+                            log::error!("[FileTransfer] Transfer error: {}", message);
+                            if let Some(ref jid) = job_id {
+                                state.update_job(jid, total_received, TransferStatus::Failed { error: message });
+                                emit_progress(&app_handle, &state, jid);
+                            }
+                            let _ = tokio::fs::remove_file(&file_path).await;
+                            return Ok(());
+                        }
+                        _ => {
+                            log::warn!("[FileTransfer] Unexpected message during file transfer");
+                        }
+                    }
+                }
             }
             FileTransferMessage::Cancel { .. } => {
                 log::info!("[FileTransfer] Transfer cancelled");
-                state.update_job(&job_id, received, TransferStatus::Cancelled);
-                emit_progress(&app_handle, &state, &job_id);
-                // Delete partial file
-                let _ = tokio::fs::remove_file(&file_path).await;
-                break;
-            }
-            FileTransferMessage::Error { message, .. } => {
-                log::error!("[FileTransfer] Transfer error: {}", message);
-                state.update_job(&job_id, received, TransferStatus::Failed { error: message });
-                emit_progress(&app_handle, &state, &job_id);
-                // Delete partial file
-                let _ = tokio::fs::remove_file(&file_path).await;
-                break;
+                if let Some(ref jid) = job_id {
+                    state.update_job(jid, total_received, TransferStatus::Cancelled);
+                    emit_progress(&app_handle, &state, jid);
+                }
+                return Ok(());
             }
             _ => {
-                log::warn!("[FileTransfer] Unexpected message during transfer");
+                // End of folder transfer or unexpected message
+                break;
             }
         }
+    }
+
+    // Folder transfer complete
+    if is_folder_transfer && file_count > 0 {
+        if let Some(ref jid) = job_id {
+            // Update display name with file count
+            if let Ok(mut jobs) = state.jobs.lock() {
+                if let Some(job) = jobs.get_mut(jid) {
+                    let folder_name = job.file_name.replace("📁 ", "");
+                    job.file_name = format!("📁 {} ({} files)", folder_name, file_count);
+                }
+            }
+            state.update_job(jid, total_size, TransferStatus::Completed);
+            emit_progress(&app_handle, &state, jid);
+        }
+        log::info!("[FileTransfer] Folder transfer complete: {} files, {} bytes", file_count, total_size);
     }
 
     Ok(())
