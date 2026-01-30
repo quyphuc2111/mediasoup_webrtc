@@ -88,6 +88,7 @@ const App: React.FC = () => {
     const startAgent = async () => {
       try {
         console.log('[StudentAgent] Auto-starting agent for student...');
+        setAgentStatus('Starting');
         await invoke('start_student_agent', {
           port: 3017,
           studentName: currentUser.userName
@@ -96,13 +97,21 @@ const App: React.FC = () => {
         console.log('[StudentAgent] Agent started successfully');
       } catch (error) {
         console.error('[StudentAgent] Failed to start agent:', error);
+        setAgentStatus(`Error: ${error}`);
+        // Retry after 3 seconds if failed
+        setTimeout(() => {
+          agentStarted.current = false;
+          startAgent();
+        }, 3000);
       }
     };
 
-    startAgent();
+    // Small delay to ensure app is fully loaded
+    const timeoutId = setTimeout(startAgent, 500);
 
     // Cleanup on unmount
     return () => {
+      clearTimeout(timeoutId);
       if (agentStarted.current) {
         invoke('stop_student_agent').catch(console.error);
         agentStarted.current = false;
@@ -119,28 +128,41 @@ const App: React.FC = () => {
     const pollStatus = async () => {
       try {
         const status = await invoke<AgentStatus>('get_agent_status');
-        // Parse status object
-        if ('Stopped' in status) setAgentStatus('Stopped');
-        else if ('Starting' in status) setAgentStatus('Starting');
-        else if ('WaitingForTeacher' in status) setAgentStatus('Waiting');
-        else if ('Authenticating' in status) setAgentStatus('Authenticating');
-        else if ('Connected' in status && status.Connected) {
-          setAgentStatus(`Connected: ${status.Connected.teacher_name}`);
-        }
-        else if ('Error' in status && status.Error) {
-          setAgentStatus(`Error: ${status.Error.message}`);
+        console.log('[App] Agent status:', status);
+        
+        // Status can be either a string or an object
+        if (typeof status === 'string') {
+          // Simple string status like "Stopped", "Starting", "WaitingForTeacher"
+          if (status === 'Stopped') setAgentStatus('Stopped');
+          else if (status === 'Starting') setAgentStatus('Starting');
+          else if (status === 'WaitingForTeacher') setAgentStatus('Waiting');
+          else if (status === 'Authenticating') setAgentStatus('Authenticating');
+          else setAgentStatus(status);
+        } else if (typeof status === 'object' && status !== null) {
+          // Object status like { Connected: { teacher_name: "..." } }
+          if ('Stopped' in status) setAgentStatus('Stopped');
+          else if ('Starting' in status) setAgentStatus('Starting');
+          else if ('WaitingForTeacher' in status) setAgentStatus('Waiting');
+          else if ('Authenticating' in status) setAgentStatus('Authenticating');
+          else if ('Connected' in status && (status as any).Connected) {
+            setAgentStatus(`Connected: ${(status as any).Connected.teacher_name}`);
+          }
+          else if ('Error' in status && (status as any).Error) {
+            setAgentStatus(`Error: ${(status as any).Error.message}`);
+          }
         }
 
         // Get port from config
         const config = await invoke<{ port: number; student_name: string }>('get_agent_config');
         setAgentPort(config.port);
       } catch (error) {
-        // Ignore errors during polling
+        console.error('[App] Error polling agent status:', error);
       }
     };
 
+    // Poll immediately and then every 1 second (faster polling)
     pollStatus();
-    const interval = setInterval(pollStatus, 2000);
+    const interval = setInterval(pollStatus, 1000);
     return () => clearInterval(interval);
   }, [currentUser]);
 

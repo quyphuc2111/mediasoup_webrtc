@@ -2,7 +2,7 @@
 //!
 //! This module implements the teacher-side WebSocket client that:
 //! 1. Connects to student agent on their machine
-//! 2. Authenticates using Ed25519 challenge-response
+//! 2. Auto-connects without authentication
 //! 3. Requests screen sharing from student
 
 use futures_util::{SinkExt, StreamExt};
@@ -12,8 +12,6 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
-
-use crate::crypto;
 
 /// Connection status for a single student
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -43,15 +41,7 @@ pub enum StudentMessage {
     #[serde(rename = "welcome")]
     Welcome {
         student_name: String,
-        auth_mode: String,         // "Ed25519" or "Ldap"
-        challenge: Option<String>, // Base64 encoded (Ed25519 only)
     },
-
-    #[serde(rename = "auth_success")]
-    AuthSuccess,
-
-    #[serde(rename = "auth_failed")]
-    AuthFailed { reason: String },
 
     #[serde(rename = "screen_ready")]
     ScreenReady { width: u32, height: u32 },
@@ -132,12 +122,6 @@ pub struct KeyboardInputEvent {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum TeacherMessage {
-    #[serde(rename = "auth_response")]
-    AuthResponse { signature: String },
-
-    #[serde(rename = "ldap_auth")]
-    LdapAuth { username: String, password: String },
-
     #[serde(rename = "request_screen")]
     RequestScreen,
 
@@ -272,28 +256,11 @@ impl ConnectorState {
     }
 }
 
-/// Authentication credentials for teacher
-#[derive(Clone)]
-pub enum AuthCredentials {
-    Ed25519, // Use Ed25519 keypair (default)
-    Ldap { username: String, password: String },
-}
-
 /// Connect to a student agent
 pub async fn connect_to_student(
     state: Arc<ConnectorState>,
     ip: String,
     port: u16,
-) -> Result<String, String> {
-    connect_to_student_with_auth(state, ip, port, AuthCredentials::Ed25519).await
-}
-
-/// Connect to a student agent with specific authentication
-pub async fn connect_to_student_with_auth(
-    state: Arc<ConnectorState>,
-    ip: String,
-    port: u16,
-    credentials: AuthCredentials,
 ) -> Result<String, String> {
     // Generate connection ID
     let id = format!("{}:{}", ip, port);
@@ -305,11 +272,6 @@ pub async fn connect_to_student_with_auth(
         {
             return Err("Already connected to this student".to_string());
         }
-    }
-
-    // Check if we have a keypair
-    if !crypto::has_keypair() {
-        return Err("No keypair found. Please generate one first.".to_string());
     }
 
     // Create connection entry
@@ -338,7 +300,6 @@ pub async fn connect_to_student_with_auth(
     let state_clone = Arc::clone(&state);
     let id_clone = id.clone();
     let ip_clone = ip.clone();
-    let credentials_clone = credentials.clone();
 
     tokio::spawn(async move {
         if let Err(e) = handle_connection(
@@ -347,7 +308,6 @@ pub async fn connect_to_student_with_auth(
             ip_clone,
             port,
             cmd_rx,
-            credentials_clone,
             None, // No app handle initially
         )
         .await
@@ -385,7 +345,6 @@ pub async fn handle_connection_async(
         ip.clone(),
         port,
         cmd_rx,
-        AuthCredentials::Ed25519,
         Some(app_handle),
     )
     .await;
@@ -410,7 +369,6 @@ async fn handle_connection(
     ip: String,
     port: u16,
     mut cmd_rx: mpsc::Receiver<ConnectionCommand>,
-    _credentials: AuthCredentials,
     app_handle: Option<AppHandle>,
 ) -> Result<(), String> {
     let url = format!("ws://{}:{}", ip, port);
@@ -438,9 +396,7 @@ async fn handle_connection(
 
     let (mut write, mut read) = ws_stream.split();
 
-    state.update_status(&id, ConnectionStatus::Authenticating);
-
-    // Wait for welcome message with auth mode info
+    // Wait for welcome message (no auth required)
     let welcome_msg = read
         .next()
         .await
@@ -455,87 +411,43 @@ async fn handle_connection(
     let welcome: StudentMessage =
         serde_json::from_str(&welcome_text).map_err(|e| format!("Invalid welcome: {}", e))?;
 
-    let (student_name, auth_mode, challenge_opt) = match welcome {
-        StudentMessage::Welcome {
-            student_name,
-            auth_mode,
-            challenge,
-        } => (student_name, auth_mode, challenge),
+    let student_name = match welcome {
+        StudentMessage::Welcome { student_name } => student_name,
         _ => return Err("Expected welcome message".to_string()),
     };
 
-    state.update_name(&id, student_name);
+    state.update_name(&id, student_name.clone());
+    state.update_status(&id, ConnectionStatus::Connected);
 
-    println!("[TeacherConnector] Student auth mode: {}", auth_mode);
+    println!("[TeacherConnector] Connected to student: {}", student_name);
 
-    // Authenticate based on mode
-    let auth_msg = if auth_mode == "Ed25519" {
-        // Ed25519 authentication
-        let challenge = challenge_opt.ok_or("No challenge provided for Ed25519 mode")?;
-
-        let keypair =
-            crypto::load_keypair().map_err(|e| format!("Failed to load keypair: {}", e))?;
-
-        let challenge_bytes =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &challenge)
-                .map_err(|e| format!("Invalid challenge: {}", e))?;
-
-        let signature = crypto::sign_challenge(&keypair.private_key, &challenge_bytes)
-            .map_err(|e| format!("Failed to sign: {}", e))?;
-
-        TeacherMessage::AuthResponse { signature }
-    } else if auth_mode == "Ldap" {
-        // LDAP authentication - for now, return error asking for credentials
-        // In a full implementation, this would come from UI
-        return Err(
-            "LDAP mode detected. Please use connect_to_student_with_ldap() \
-             or implement UI for LDAP credentials."
-                .to_string(),
-        );
-    } else {
-        return Err(format!("Unknown auth mode: {}", auth_mode));
-    };
-
-    // Send auth message
-    let auth_json =
-        serde_json::to_string(&auth_msg).map_err(|e| format!("Serialize error: {}", e))?;
-
-    write
-        .send(Message::Text(auth_json))
-        .await
-        .map_err(|e| format!("Failed to send auth: {}", e))?;
-
-    // Wait for auth result
-    let auth_result = read
+    // Wait for screen_ready message (auto-started by student)
+    let screen_ready_msg = read
         .next()
         .await
-        .ok_or("Connection closed during auth")?
+        .ok_or("Connection closed")?
         .map_err(|e| format!("WebSocket error: {}", e))?;
 
-    let auth_text = match auth_result {
+    let screen_ready_text = match screen_ready_msg {
         Message::Text(text) => text,
         _ => return Err("Expected text message".to_string()),
     };
 
-    let auth_response: StudentMessage =
-        serde_json::from_str(&auth_text).map_err(|e| format!("Invalid auth response: {}", e))?;
+    let screen_ready: StudentMessage =
+        serde_json::from_str(&screen_ready_text).map_err(|e| format!("Invalid screen_ready: {}", e))?;
 
-    match auth_response {
-        StudentMessage::AuthSuccess => {
-            log::info!("[TeacherConnector] Authentication successful");
-            state.update_status(&id, ConnectionStatus::Connected);
-        }
-        StudentMessage::AuthFailed { reason } => {
-            state.update_status(
-                &id,
-                ConnectionStatus::Error {
-                    message: reason.clone(),
-                },
-            );
-            return Err(format!("Authentication failed: {}", reason));
+    match screen_ready {
+        StudentMessage::ScreenReady { width, height } => {
+            println!("[TeacherConnector] Screen ready: {}x{}", width, height);
+            state.update_status(&id, ConnectionStatus::Viewing);
+            
+            // Store screen size
+            if let Ok(mut sizes) = state.screen_sizes.lock() {
+                sizes.insert(id.clone(), (width, height));
+            }
         }
         _ => {
-            return Err("Unexpected auth response".to_string());
+            println!("[TeacherConnector] Unexpected message, expected screen_ready");
         }
     }
 

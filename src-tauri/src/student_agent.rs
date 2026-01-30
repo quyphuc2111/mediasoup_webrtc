@@ -2,7 +2,7 @@
 //!
 //! This module implements a mini WebSocket server on the student machine that:
 //! 1. Listens for incoming connections from teacher
-//! 2. Authenticates teacher using Ed25519 challenge-response
+//! 2. Auto-accepts connections (no authentication required)
 //! 3. Captures and streams screen to teacher
 //! 4. Receives and executes remote input (mouse/keyboard)
 
@@ -18,7 +18,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::crypto;
 use crate::h264_encoder::H264Encoder;
 use crate::screen_capture;
 
@@ -94,12 +93,6 @@ pub struct KeyboardInputEvent {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum TeacherMessage {
-    #[serde(rename = "auth_response")]
-    AuthResponse { signature: String },
-
-    #[serde(rename = "ldap_auth")]
-    LdapAuth { username: String, password: String },
-
     #[serde(rename = "request_screen")]
     RequestScreen,
 
@@ -141,15 +134,7 @@ pub enum StudentMessage {
     #[serde(rename = "welcome")]
     Welcome {
         student_name: String,
-        auth_mode: String,         // "Ed25519" or "Ldap"
-        challenge: Option<String>, // Base64 encoded (Ed25519 only)
     },
-
-    #[serde(rename = "auth_success")]
-    AuthSuccess,
-
-    #[serde(rename = "auth_failed")]
-    AuthFailed { reason: String },
 
     #[serde(rename = "screen_ready")]
     ScreenReady { width: u32, height: u32 },
@@ -187,9 +172,8 @@ pub enum StudentMessage {
 
 /// Connection state for a single teacher connection
 struct TeacherConnection {
+    #[allow(dead_code)]
     addr: SocketAddr,
-    authenticated: bool,
-    challenge: Vec<u8>,
     screen_sharing: bool,
     stop_capture: Option<Arc<AtomicBool>>,
     keyframe_request_tx: Option<broadcast::Sender<()>>,
@@ -261,34 +245,13 @@ async fn handle_connection(
 
     let (mut write, mut read) = ws_stream.split();
 
-    // Check authentication mode
-    let auth_mode = crypto::load_auth_mode();
-
-    // Generate challenge for Ed25519 mode
-    let challenge = if auth_mode == crypto::AuthMode::Ed25519 {
-        crypto::generate_challenge()
-    } else {
-        vec![]
-    };
-
-    let challenge_b64 = if !challenge.is_empty() {
-        Some(base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &challenge,
-        ))
-    } else {
-        None
-    };
-
-    // Store connection state
+    // Store connection state (auto-authenticated, no auth required)
     {
         let mut conns = state.connections.lock().unwrap();
         conns.insert(
             addr,
             TeacherConnection {
                 addr,
-                authenticated: false,
-                challenge: challenge.clone(),
                 screen_sharing: false,
                 stop_capture: None,
                 keyframe_request_tx: None,
@@ -306,16 +269,9 @@ async fn handle_connection(
         .map(|c| c.student_name.clone())
         .unwrap_or_else(|_| "Student".to_string());
 
-    // Send welcome with auth mode info
-    let auth_mode_str = match auth_mode {
-        crypto::AuthMode::Ed25519 => "Ed25519",
-        crypto::AuthMode::Ldap => "Ldap",
-    };
-
+    // Send welcome message (no auth required)
     let welcome = StudentMessage::Welcome {
-        student_name,
-        auth_mode: auth_mode_str.to_string(),
-        challenge: challenge_b64,
+        student_name: student_name.clone(),
     };
 
     if let Err(e) = send_message(&mut write, &welcome).await {
@@ -323,7 +279,23 @@ async fn handle_connection(
         return;
     }
 
-    state.set_status(AgentStatus::Authenticating);
+    // Auto-connect: set status to Connected and start screen capture immediately
+    state.set_status(AgentStatus::Connected {
+        teacher_name: "Teacher".to_string(),
+    });
+
+    // AUTO-START SCREEN CAPTURE on connection
+    if let Err(e) = start_screen_capture(addr, &state, &frame_tx) {
+        log::error!("[StudentAgent] Failed to start screen capture: {}", e);
+    } else {
+        // Get screen resolution and send ready message
+        let (width, height) = screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
+        let ready_response = StudentMessage::ScreenReady { width, height };
+        if let Err(e) = send_message(&mut write, &ready_response).await {
+            log::error!("[StudentAgent] Failed to send screen ready: {}", e);
+        }
+        log::info!("[StudentAgent] Screen sharing auto-started for {}", addr);
+    }
 
     // Message handling loop
     loop {
@@ -411,153 +383,15 @@ where
         serde_json::from_str(text).map_err(|e| format!("Invalid message: {}", e))?;
 
     match msg {
-        TeacherMessage::AuthResponse { signature } => {
-            // Ed25519 authentication
-            let (challenge, is_authenticated) = {
-                let conns = state.connections.lock().unwrap();
-                let conn = conns.get(&addr).ok_or("Connection not found")?;
-                (conn.challenge.clone(), conn.authenticated)
-            };
-
-            if is_authenticated {
-                return Ok(()); // Already authenticated
-            }
-
-            // Load teacher's public key and verify
-            let public_key = crypto::load_teacher_public_key()
-                .map_err(|e| format!("Failed to load teacher key: {}", e))?;
-
-            let result = crypto::verify_signature(&public_key, &challenge, &signature);
-
-            if result.valid {
-                // Mark as authenticated
-                {
-                    let mut conns = state.connections.lock().unwrap();
-                    if let Some(conn) = conns.get_mut(&addr) {
-                        conn.authenticated = true;
-                    }
-                }
-
-                state.set_status(AgentStatus::Connected {
-                    teacher_name: "Teacher".to_string(),
-                });
-
-                let response = StudentMessage::AuthSuccess;
-                send_message(write, &response).await?;
-
-                crate::log_debug(
-                    "info",
-                    "[StudentAgent] Teacher authenticated successfully (Ed25519)",
-                );
-
-                // AUTO-START SCREEN CAPTURE after authentication
-                start_screen_capture(addr, state, frame_tx)?;
-
-                // Get screen resolution
-                let (width, height) =
-                    screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
-
-                let ready_response = StudentMessage::ScreenReady { width, height };
-                send_message(write, &ready_response).await?;
-            } else {
-                let reason = result
-                    .error
-                    .unwrap_or_else(|| "Invalid signature".to_string());
-                let response = StudentMessage::AuthFailed {
-                    reason: reason.clone(),
-                };
-                send_message(write, &response).await?;
-
-                return Err(format!("Authentication failed: {}", reason));
-            }
-        }
-
-        TeacherMessage::LdapAuth { username, password } => {
-            // LDAP authentication
-            let is_authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if is_authenticated {
-                return Ok(()); // Already authenticated
-            }
-
-            // Load LDAP config and authenticate
-            let ldap_config = crate::ldap_auth::load_ldap_config()
-                .map_err(|e| format!("Failed to load LDAP config: {}", e))?;
-
-            let auth_result =
-                crate::ldap_auth::authenticate_ldap(&ldap_config, &username, &password).await;
-
-            if auth_result.success {
-                // Mark as authenticated
-                {
-                    let mut conns = state.connections.lock().unwrap();
-                    if let Some(conn) = conns.get_mut(&addr) {
-                        conn.authenticated = true;
-                    }
-                }
-
-                let teacher_name = auth_result
-                    .display_name
-                    .or(auth_result.username)
-                    .unwrap_or_else(|| "Teacher".to_string());
-
-                state.set_status(AgentStatus::Connected {
-                    teacher_name: teacher_name.clone(),
-                });
-
-                let response = StudentMessage::AuthSuccess;
-                send_message(write, &response).await?;
-
-                crate::log_debug(
-                    "info",
-                    &format!(
-                        "[StudentAgent] Teacher {} authenticated successfully (LDAP)",
-                        teacher_name
-                    ),
-                );
-
-                // AUTO-START SCREEN CAPTURE after authentication
-                start_screen_capture(addr, state, frame_tx)?;
-
-                // Get screen resolution
-                let (width, height) =
-                    screen_capture::get_screen_resolution().unwrap_or((1920, 1080));
-
-                let ready_response = StudentMessage::ScreenReady { width, height };
-                send_message(write, &ready_response).await?;
-            } else {
-                let reason = auth_result
-                    .error
-                    .unwrap_or_else(|| "LDAP authentication failed".to_string());
-                let response = StudentMessage::AuthFailed {
-                    reason: reason.clone(),
-                };
-                send_message(write, &response).await?;
-
-                return Err(format!("LDAP authentication failed: {}", reason));
-            }
-        }
-
         TeacherMessage::RequestScreen => {
-            // Check if authenticated
-            let (authenticated, already_sharing) = {
+            // Check if already sharing
+            let already_sharing = {
                 let conns = state.connections.lock().unwrap();
                 conns
                     .get(&addr)
-                    .map(|c| (c.authenticated, c.screen_sharing))
-                    .unwrap_or((false, false))
+                    .map(|c| c.screen_sharing)
+                    .unwrap_or(false)
             };
-
-            if !authenticated {
-                let response = StudentMessage::Error {
-                    message: "Not authenticated".to_string(),
-                };
-                send_message(write, &response).await?;
-                return Err("Not authenticated".to_string());
-            }
 
             if already_sharing {
                 println!("[StudentAgent] Screen already being shared");
@@ -600,35 +434,14 @@ where
         }
 
         TeacherMessage::MouseInput { event } => {
-            // Check if authenticated
-            let authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if !authenticated {
-                return Err("Not authenticated".to_string());
-            }
-
-            // Handle mouse input
+            // Handle mouse input (no auth check needed)
             if let Err(e) = handle_mouse_input(&event) {
                 log::warn!("[StudentAgent] Failed to handle mouse input: {}", e);
             }
         }
 
         TeacherMessage::MouseInputBatch { events } => {
-            // Check if authenticated
-            let authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if !authenticated {
-                return Err("Not authenticated".to_string());
-            }
-
-            // Handle batched mouse inputs - process all but only apply the last move event
-            // This reduces latency by skipping intermediate positions
+            // Handle batched mouse inputs
             for event in events.iter() {
                 if let Err(e) = handle_mouse_input(event) {
                     log::warn!("[StudentAgent] Failed to handle mouse input: {}", e);
@@ -637,34 +450,14 @@ where
         }
 
         TeacherMessage::KeyboardInput { event } => {
-            // Check if authenticated
-            let authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if !authenticated {
-                return Err("Not authenticated".to_string());
-            }
-
-            // Handle keyboard input
+            // Handle keyboard input (no auth check needed)
             if let Err(e) = handle_keyboard_input(&event) {
                 log::warn!("[StudentAgent] Failed to handle keyboard input: {}", e);
             }
         }
 
         TeacherMessage::RequestKeyframe => {
-            // Check if authenticated
-            let authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if !authenticated {
-                return Err("Not authenticated".to_string());
-            }
-
-            // We signal the capture loop to send a keyframe
+            // Signal the capture loop to send a keyframe
             if let Ok(conns) = state.connections.lock() {
                 if let Some(conn) = conns.get(&addr) {
                     if let Some(ref tx) = conn.keyframe_request_tx {
@@ -683,16 +476,6 @@ where
             file_data,
             file_size,
         } => {
-            // Check if authenticated
-            let authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if !authenticated {
-                return Err("Not authenticated".to_string());
-            }
-
             log::info!(
                 "[StudentAgent] Receiving file: {} ({} bytes) from {}",
                 file_name,
@@ -724,16 +507,6 @@ where
         }
 
         TeacherMessage::ListDirectory { path } => {
-            // Check if authenticated
-            let authenticated = {
-                let conns = state.connections.lock().unwrap();
-                conns.get(&addr).map(|c| c.authenticated).unwrap_or(false)
-            };
-
-            if !authenticated {
-                return Err("Not authenticated".to_string());
-            }
-
             log::info!("[StudentAgent] Listing directory: {}", path);
 
             // If path is empty, use Downloads directory
@@ -1325,42 +1098,7 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
         return Err("Agent already running".to_string());
     }
 
-    // Check authentication requirements based on mode
-    let auth_mode = crypto::load_auth_mode();
-
-    if auth_mode == crypto::AuthMode::Ed25519 {
-        // Ed25519 mode: require teacher's public key
-        if !crypto::has_teacher_public_key() {
-            println!("[StudentAgent] ERROR: Teacher's public key not configured!");
-            state.set_status(AgentStatus::Error {
-                message: "Chưa import khóa giáo viên".to_string(),
-            });
-            return Err("Teacher's public key not configured. Please import it first.".to_string());
-        }
-        println!("[StudentAgent] Ed25519 mode - Teacher's public key found");
-    } else {
-        // LDAP mode: require LDAP configuration
-        match crate::ldap_auth::load_ldap_config() {
-            Ok(config) => {
-                if config.server_url.is_empty() {
-                    println!("[StudentAgent] ERROR: LDAP not configured!");
-                    state.set_status(AgentStatus::Error {
-                        message: "LDAP chưa được cấu hình".to_string(),
-                    });
-                    return Err(
-                        "LDAP not configured. Please configure LDAP settings first.".to_string()
-                    );
-                }
-                println!("[StudentAgent] LDAP mode - Configuration loaded");
-            }
-            Err(e) => {
-                println!("[StudentAgent] ERROR: Failed to load LDAP config: {}", e);
-                return Err(format!("Failed to load LDAP config: {}", e));
-            }
-        }
-    }
-
-    println!("[StudentAgent] Teacher's public key found, starting...");
+    println!("[StudentAgent] Starting agent (no authentication required)...");
     state.set_status(AgentStatus::Starting);
 
     // Get configuration
@@ -1521,8 +1259,6 @@ mod tests {
     fn test_message_serialization() {
         let msg = StudentMessage::Welcome {
             student_name: "Test".to_string(),
-            auth_mode: "Ed25519".to_string(),
-            challenge: Some("abc123".to_string()),
         };
 
         let json = serde_json::to_string(&msg).unwrap();
