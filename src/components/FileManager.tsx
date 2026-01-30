@@ -1,6 +1,13 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import {
+  UncontrolledTreeEnvironment,
+  Tree,
+  TreeItem,
+  TreeItemIndex,
+} from 'react-complex-tree';
+import 'react-complex-tree/lib/style-modern.css';
 
 interface FileInfo {
   name: string;
@@ -40,17 +47,28 @@ interface FileManagerProps {
   onClose: () => void;
 }
 
+// Tree data provider for react-complex-tree
+interface TreeData {
+  [key: string]: TreeItem<FileInfo>;
+}
+
 export function FileManager({ student, onClose }: FileManagerProps) {
   // Teacher (local) file browser state
   const [teacherPath, setTeacherPath] = useState<string>('');
   const [teacherFiles, setTeacherFiles] = useState<FileInfo[]>([]);
-  const [teacherSelected, setTeacherSelected] = useState<Set<string>>(new Set());
+  const [teacherTreeData, setTeacherTreeData] = useState<TreeData>({});
+  const [teacherFocusedItem, setTeacherFocusedItem] = useState<TreeItemIndex>();
+  const [teacherExpandedItems, setTeacherExpandedItems] = useState<TreeItemIndex[]>([]);
+  const [teacherSelectedItems, setTeacherSelectedItems] = useState<TreeItemIndex[]>([]);
   const [teacherLoading, setTeacherLoading] = useState(false);
 
   // Student (remote) file browser state
   const [studentPath, setStudentPath] = useState<string>('');
   const [studentFiles, setStudentFiles] = useState<FileInfo[]>([]);
-  const [studentSelected, setStudentSelected] = useState<Set<string>>(new Set());
+  const [studentTreeData, setStudentTreeData] = useState<TreeData>({});
+  const [studentFocusedItem, setStudentFocusedItem] = useState<TreeItemIndex>();
+  const [studentExpandedItems, setStudentExpandedItems] = useState<TreeItemIndex[]>([]);
+  const [studentSelectedItems, setStudentSelectedItems] = useState<TreeItemIndex[]>([]);
   const [studentLoading, setStudentLoading] = useState(false);
   const [studentError, setStudentError] = useState<string | null>(null);
 
@@ -62,6 +80,44 @@ export function FileManager({ student, onClose }: FileManagerProps) {
   useEffect(() => {
     initializePaths();
   }, []);
+
+  // Convert flat file list to tree data structure
+  const buildTreeData = (files: FileInfo[], rootPath: string): TreeData => {
+    const treeData: TreeData = {
+      root: {
+        index: 'root',
+        isFolder: true,
+        children: files.map(f => f.path),
+        data: {
+          name: rootPath || 'Root',
+          path: rootPath,
+          is_dir: true,
+          size: 0,
+          modified: 0,
+        },
+      },
+    };
+
+    files.forEach(file => {
+      treeData[file.path] = {
+        index: file.path,
+        isFolder: file.is_dir,
+        children: file.is_dir ? [] : undefined,
+        data: file,
+      };
+    });
+
+    return treeData;
+  };
+
+  // Update tree data when files change
+  useEffect(() => {
+    setTeacherTreeData(buildTreeData(teacherFiles, teacherPath));
+  }, [teacherFiles, teacherPath]);
+
+  useEffect(() => {
+    setStudentTreeData(buildTreeData(studentFiles, studentPath));
+  }, [studentFiles, studentPath]);
 
   // Listen for transfer progress
   useEffect(() => {
@@ -119,7 +175,7 @@ export function FileManager({ student, onClose }: FileManagerProps) {
       const files = await invoke<FileInfo[]>('list_directory', { path });
       setTeacherFiles(files);
       setTeacherPath(path);
-      setTeacherSelected(new Set());
+      setTeacherSelectedItems([]);
     } catch (e) {
       setError(`Lỗi đọc thư mục: ${e}`);
     } finally {
@@ -138,7 +194,7 @@ export function FileManager({ student, onClose }: FileManagerProps) {
       });
       setStudentFiles(files);
       setStudentPath(path);
-      setStudentSelected(new Set());
+      setStudentSelectedItems([]);
     } catch (e) {
       setStudentError(`${e}`);
       setStudentFiles([]);
@@ -147,21 +203,9 @@ export function FileManager({ student, onClose }: FileManagerProps) {
     }
   };
 
-  const navigateTeacher = (file: FileInfo) => {
-    if (file.is_dir) {
-      loadTeacherFiles(file.path);
-    }
-  };
-
   const navigateTeacherUp = () => {
     const parentPath = teacherPath.split(/[/\\]/).slice(0, -1).join('/') || '/';
     loadTeacherFiles(parentPath);
-  };
-
-  const navigateStudent = (file: FileInfo) => {
-    if (file.is_dir) {
-      loadStudentFiles(file.path);
-    }
   };
 
   const navigateStudentUp = () => {
@@ -169,37 +213,25 @@ export function FileManager({ student, onClose }: FileManagerProps) {
     loadStudentFiles(parentPath);
   };
 
-  const toggleTeacherSelect = (file: FileInfo, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setTeacherSelected(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(file.path)) {
-        newSet.delete(file.path);
-      } else {
-        newSet.add(file.path);
-      }
-      return newSet;
-    });
+  // Handle double-click on tree item to navigate into folder
+  const handleTeacherPrimaryAction = (item: TreeItem<FileInfo>) => {
+    if (item.data.is_dir) {
+      loadTeacherFiles(item.data.path);
+    }
   };
 
-  const toggleStudentSelect = (file: FileInfo, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setStudentSelected(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(file.path)) {
-        newSet.delete(file.path);
-      } else {
-        newSet.add(file.path);
-      }
-      return newSet;
-    });
+  const handleStudentPrimaryAction = (item: TreeItem<FileInfo>) => {
+    if (item.data.is_dir) {
+      loadStudentFiles(item.data.path);
+    }
   };
 
   // Send selected files from teacher to student
   const sendToStudent = async () => {
-    if (teacherSelected.size === 0) return;
+    if (teacherSelectedItems.length === 0) return;
 
-    for (const filePath of teacherSelected) {
+    for (const itemIndex of teacherSelectedItems) {
+      const filePath = itemIndex as string;
       try {
         await invoke<string>('send_file_to_student', {
           studentId: student.id,
@@ -209,12 +241,12 @@ export function FileManager({ student, onClose }: FileManagerProps) {
         setError(`Lỗi gửi file: ${e}`);
       }
     }
-    setTeacherSelected(new Set());
+    setTeacherSelectedItems([]);
   };
 
   // Request files from student (not implemented yet - would need student-side upload)
   const receiveFromStudent = async () => {
-    if (studentSelected.size === 0) return;
+    if (studentSelectedItems.length === 0) return;
     setError('Tính năng nhận file từ học sinh chưa được hỗ trợ');
   };
 
@@ -223,11 +255,6 @@ export function FileManager({ student, onClose }: FileManagerProps) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-  };
-
-  const formatDate = (timestamp: number): string => {
-    if (!timestamp) return '';
-    return new Date(timestamp * 1000).toLocaleDateString('vi-VN');
   };
 
   const getTransferStatusText = (status: TransferStatus): string => {
@@ -281,27 +308,54 @@ export function FileManager({ student, onClose }: FileManagerProps) {
                 <button onClick={() => loadTeacherFiles(teacherPath)} className="btn-icon" title="Làm mới">🔄</button>
               </div>
             </div>
-            <div className="fm-file-list">
+            <div className="fm-tree-container">
               {teacherLoading ? (
                 <div className="fm-loading">Đang tải...</div>
               ) : (
-                teacherFiles.map((file) => (
-                  <div
-                    key={file.path}
-                    className={`fm-file-item ${teacherSelected.has(file.path) ? 'selected' : ''}`}
-                    onClick={(e) => toggleTeacherSelect(file, e)}
-                    onDoubleClick={() => navigateTeacher(file)}
-                  >
-                    <span className="file-icon">{file.is_dir ? '📁' : '📄'}</span>
-                    <span className="file-name">{file.name}</span>
-                    <span className="file-size">{file.is_dir ? '' : formatSize(file.size)}</span>
-                    <span className="file-date">{formatDate(file.modified)}</span>
-                  </div>
-                ))
+                <UncontrolledTreeEnvironment
+                  dataProvider={{
+                    async getTreeItem(itemId: TreeItemIndex) {
+                      return teacherTreeData[itemId];
+                    },
+                    async onChangeItemChildren(itemId: TreeItemIndex, newChildren: TreeItemIndex[]) {
+                      setTeacherTreeData(prev => ({
+                        ...prev,
+                        [itemId]: { ...prev[itemId], children: newChildren },
+                      }));
+                    },
+                  }}
+                  getItemTitle={(item) => item.data.name}
+                  viewState={{
+                    'teacher-tree': {
+                      focusedItem: teacherFocusedItem,
+                      expandedItems: teacherExpandedItems,
+                      selectedItems: teacherSelectedItems,
+                    },
+                  }}
+                  onFocusItem={(item) => setTeacherFocusedItem(item.index)}
+                  onExpandItem={(item) => setTeacherExpandedItems(prev => [...prev, item.index])}
+                  onCollapseItem={(item) => setTeacherExpandedItems(prev => prev.filter(i => i !== item.index))}
+                  onSelectItems={(items) => setTeacherSelectedItems(items)}
+                  onPrimaryAction={(item) => handleTeacherPrimaryAction(item)}
+                  canDragAndDrop={false}
+                  canDropOnFolder={false}
+                  canReorderItems={false}
+                  renderItemTitle={({ item, title }) => (
+                    <span className="tree-item-title">
+                      <span className="tree-item-icon">{item.data.is_dir ? '📁' : '📄'}</span>
+                      <span className="tree-item-name">{title}</span>
+                      {!item.data.is_dir && (
+                        <span className="tree-item-size">{formatSize(item.data.size)}</span>
+                      )}
+                    </span>
+                  )}
+                >
+                  <Tree treeId="teacher-tree" rootItem="root" treeLabel="Teacher Files" />
+                </UncontrolledTreeEnvironment>
               )}
             </div>
             <div className="fm-panel-footer">
-              {teacherSelected.size} đã chọn
+              {teacherSelectedItems.length} đã chọn
             </div>
           </div>
 
@@ -309,7 +363,7 @@ export function FileManager({ student, onClose }: FileManagerProps) {
           <div className="fm-transfer-buttons">
             <button 
               onClick={sendToStudent}
-              disabled={teacherSelected.size === 0}
+              disabled={teacherSelectedItems.length === 0}
               className="btn transfer-btn"
               title="Gửi file đã chọn sang máy học sinh"
             >
@@ -318,7 +372,7 @@ export function FileManager({ student, onClose }: FileManagerProps) {
             </button>
             <button 
               onClick={receiveFromStudent}
-              disabled={studentSelected.size === 0}
+              disabled={studentSelectedItems.length === 0}
               className="btn transfer-btn"
               title="Nhận file từ máy học sinh (chưa hỗ trợ)"
             >
@@ -330,7 +384,7 @@ export function FileManager({ student, onClose }: FileManagerProps) {
           {/* Student (Remote) Panel */}
           <div className="fm-panel student-panel">
             <div className="fm-panel-header">
-              <span className="panel-title">👨‍🎓 Máy Học sinh</span>
+              <span className="panel-title">�‍🎓 Máy Học sinh</span>
               <div className="fm-path">
                 <button onClick={navigateStudentUp} className="btn-icon" title="Lên thư mục cha">⬆️</button>
                 <input 
@@ -343,7 +397,7 @@ export function FileManager({ student, onClose }: FileManagerProps) {
                 <button onClick={() => loadStudentFiles(studentPath)} className="btn-icon" title="Làm mới">🔄</button>
               </div>
             </div>
-            <div className="fm-file-list">
+            <div className="fm-tree-container">
               {studentLoading ? (
                 <div className="fm-loading">Đang tải...</div>
               ) : studentError ? (
@@ -351,23 +405,50 @@ export function FileManager({ student, onClose }: FileManagerProps) {
               ) : studentFiles.length === 0 ? (
                 <div className="fm-empty">Thư mục trống hoặc chưa kết nối</div>
               ) : (
-                studentFiles.map((file) => (
-                  <div
-                    key={file.path}
-                    className={`fm-file-item ${studentSelected.has(file.path) ? 'selected' : ''}`}
-                    onClick={(e) => toggleStudentSelect(file, e)}
-                    onDoubleClick={() => navigateStudent(file)}
-                  >
-                    <span className="file-icon">{file.is_dir ? '📁' : '📄'}</span>
-                    <span className="file-name">{file.name}</span>
-                    <span className="file-size">{file.is_dir ? '' : formatSize(file.size)}</span>
-                    <span className="file-date">{formatDate(file.modified)}</span>
-                  </div>
-                ))
+                <UncontrolledTreeEnvironment
+                  dataProvider={{
+                    async getTreeItem(itemId: TreeItemIndex) {
+                      return studentTreeData[itemId];
+                    },
+                    async onChangeItemChildren(itemId: TreeItemIndex, newChildren: TreeItemIndex[]) {
+                      setStudentTreeData(prev => ({
+                        ...prev,
+                        [itemId]: { ...prev[itemId], children: newChildren },
+                      }));
+                    },
+                  }}
+                  getItemTitle={(item) => item.data.name}
+                  viewState={{
+                    'student-tree': {
+                      focusedItem: studentFocusedItem,
+                      expandedItems: studentExpandedItems,
+                      selectedItems: studentSelectedItems,
+                    },
+                  }}
+                  onFocusItem={(item) => setStudentFocusedItem(item.index)}
+                  onExpandItem={(item) => setStudentExpandedItems(prev => [...prev, item.index])}
+                  onCollapseItem={(item) => setStudentExpandedItems(prev => prev.filter(i => i !== item.index))}
+                  onSelectItems={(items) => setStudentSelectedItems(items)}
+                  onPrimaryAction={(item) => handleStudentPrimaryAction(item)}
+                  canDragAndDrop={false}
+                  canDropOnFolder={false}
+                  canReorderItems={false}
+                  renderItemTitle={({ item, title }) => (
+                    <span className="tree-item-title">
+                      <span className="tree-item-icon">{item.data.is_dir ? '📁' : '📄'}</span>
+                      <span className="tree-item-name">{title}</span>
+                      {!item.data.is_dir && (
+                        <span className="tree-item-size">{formatSize(item.data.size)}</span>
+                      )}
+                    </span>
+                  )}
+                >
+                  <Tree treeId="student-tree" rootItem="root" treeLabel="Student Files" />
+                </UncontrolledTreeEnvironment>
               )}
             </div>
             <div className="fm-panel-footer">
-              {studentSelected.size} đã chọn
+              {studentSelectedItems.length} đã chọn
             </div>
           </div>
         </div>

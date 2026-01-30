@@ -2254,3 +2254,127 @@ h1 {
   text-align: right;
   font-weight: 600;
 }
+
+/* ============================================
+   React Complex Tree - Windows Explorer Style
+   ============================================ */
+
+.fm-tree-container {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-secondary);
+  padding: 0.5rem;
+}
+
+/* Override react-complex-tree default styles */
+.rct-tree-root {
+  background: transparent !important;
+  color: var(--text) !important;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  font-size: 0.9rem !important;
+}
+
+.rct-tree-item-li {
+  list-style: none !important;
+}
+
+.rct-tree-item-title-container {
+  padding: 0.4rem 0.5rem !important;
+  border-radius: 4px !important;
+  cursor: pointer !important;
+  transition: background 0.15s !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+}
+
+.rct-tree-item-title-container:hover {
+  background: rgba(59, 130, 246, 0.1) !important;
+}
+
+.rct-tree-item-title-container-selected {
+  background: rgba(59, 130, 246, 0.25) !important;
+  border: 1px solid var(--primary) !important;
+}
+
+.rct-tree-item-title-container-focused {
+  outline: 1px solid var(--primary) !important;
+  outline-offset: -1px !important;
+}
+
+.rct-tree-item-arrow {
+  color: var(--text-secondary) !important;
+  font-size: 0.8rem !important;
+  width: 16px !important;
+  height: 16px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.rct-tree-item-arrow svg {
+  fill: var(--text-secondary) !important;
+}
+
+/* Custom tree item rendering */
+.tree-item-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-item-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+.tree-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.tree-item-size {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Tree scrollbar styling */
+.fm-tree-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.fm-tree-container::-webkit-scrollbar-track {
+  background: var(--bg);
+  border-radius: 4px;
+}
+
+.fm-tree-container::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.fm-tree-container::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Drag and drop disabled styling */
+.rct-tree-item-title-container-dragging-over,
+.rct-tree-item-title-container-dragging-over-folder {
+  background: transparent !important;
+}
+
+/* Loading/Empty states in tree */
+.fm-tree-container .fm-loading,
+.fm-tree-container .fm-empty,
+.fm-tree-container .fm-error-inline {
+  padding: 2rem;
+  text-align: center;
+}

@@ -33,6 +33,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "mediasoup-client": "^3.7.17",
     "react": "^19.1.0",
+    "react-complex-tree": "^2.6.1",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
