@@ -1105,6 +1105,20 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
     let default_port = state.config.lock().map(|c| c.port).unwrap_or(3017);
     let mut port = default_port;
 
+    // Start integrated discovery listener (UDP) in background thread
+    let student_name = state
+        .config
+        .lock()
+        .map(|c| c.student_name.clone())
+        .unwrap_or_else(|_| "Student".to_string());
+    let discovery_port = port;
+    std::thread::spawn(move || {
+        println!("[StudentAgent] Starting integrated discovery listener on UDP port {}...", discovery_port);
+        if let Err(e) = crate::lan_discovery::respond_to_discovery(&student_name, discovery_port) {
+            eprintln!("[StudentAgent] Discovery listener error: {}", e);
+        }
+    });
+
     // Forcefully kill any process holding the port to ensure we can bind
     kill_port_holder(port);
     // Give OS a moment to release the port

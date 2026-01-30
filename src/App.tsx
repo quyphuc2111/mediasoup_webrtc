@@ -89,12 +89,15 @@ const App: React.FC = () => {
       try {
         console.log('[StudentAgent] Auto-starting agent for student...');
         setAgentStatus('Starting');
+        
+        // Start student agent (WebSocket server + integrated UDP discovery listener)
         await invoke('start_student_agent', {
           port: 3017,
           studentName: currentUser.userName
         });
+        
         agentStarted.current = true;
-        console.log('[StudentAgent] Agent started successfully');
+        console.log('[StudentAgent] Agent started successfully (with integrated discovery)');
       } catch (error) {
         console.error('[StudentAgent] Failed to start agent:', error);
         setAgentStatus(`Error: ${error}`);
@@ -114,6 +117,7 @@ const App: React.FC = () => {
       clearTimeout(timeoutId);
       if (agentStarted.current) {
         invoke('stop_student_agent').catch(console.error);
+        invoke('stop_discovery_listener').catch(console.error);
         agentStarted.current = false;
       }
     };

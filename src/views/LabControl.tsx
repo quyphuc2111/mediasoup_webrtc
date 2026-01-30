@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { 
   Monitor, Grid, List, CheckCircle2, 
   Eye, MousePointer, FolderOpen, Wifi, WifiOff, RefreshCw, Loader2,
-  Trash2, Link, Unlink, Maximize2, X, Minimize2
+  Trash2, Link, Unlink, Maximize2, X, Minimize2, Plus
 } from 'lucide-react';
 import { RoomComputer } from '../types';
 import { H264VideoPlayer } from '../components/H264VideoPlayer';
@@ -103,6 +103,13 @@ const LabControl: React.FC<LabControlProps> = () => {
 
   // FileManager state
   const [fileManagerStudent, setFileManagerStudent] = useState<StudentConnection | null>(null);
+
+  // Manual IP input state
+  const [showAddManualModal, setShowAddManualModal] = useState(false);
+  const [manualIp, setManualIp] = useState('');
+  const [manualPort, setManualPort] = useState('3017');
+  const [manualName, setManualName] = useState('');
+  const [isAddingManual, setIsAddingManual] = useState(false);
 
   // Remote control refs
   const screenContainerRef = useRef<HTMLDivElement>(null);
@@ -237,6 +244,34 @@ const LabControl: React.FC<LabControlProps> = () => {
   };
 
   const getConnection = (ip: string) => connections.find(c => c.ip === ip);
+
+  // Add device manually by IP
+  const addManualDevice = async () => {
+    if (!manualIp.trim()) return;
+    setIsAddingManual(true);
+    try {
+      const port = parseInt(manualPort) || 3017;
+      const name = manualName.trim() || `Máy ${manualIp}`;
+      
+      // Save to database
+      await invoke('save_device_to_db', { ip: manualIp.trim(), name, port });
+      await loadSavedDevices();
+      
+      // Try to connect
+      await connectToStudent(manualIp.trim(), port);
+      
+      // Reset and close modal
+      setManualIp('');
+      setManualPort('3017');
+      setManualName('');
+      setShowAddManualModal(false);
+    } catch (error) {
+      console.error('Failed to add manual device:', error);
+      alert(`Lỗi: ${error}`);
+    } finally {
+      setIsAddingManual(false);
+    }
+  };
 
   const getStatusText = (status: ConnectionStatus): string => {
     if (typeof status === 'string') {
@@ -549,6 +584,10 @@ const LabControl: React.FC<LabControlProps> = () => {
             {isScanning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
             {isScanning ? 'Đang quét...' : 'Quét LAN'}
           </button>
+          <button onClick={() => setShowAddManualModal(true)}
+            className="flex items-center gap-2 px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest bg-slate-600 text-white hover:bg-slate-700 transition-all">
+            <Plus className="w-4 h-4" /> Thêm IP
+          </button>
           <button onClick={connectAll} disabled={isConnectingAll || discoveredDevices.length === 0}
             className="flex items-center gap-2 px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest bg-emerald-600 text-white hover:bg-emerald-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
             <Link className="w-4 h-4" /> Kết nối tất cả
@@ -718,6 +757,75 @@ const LabControl: React.FC<LabControlProps> = () => {
           student={fileManagerStudent}
           onClose={closeFileManager}
         />
+      )}
+
+      {/* Manual IP Input Modal */}
+      {showAddManualModal && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 bg-slate-50 border-b border-slate-200">
+              <h3 className="text-lg font-black text-slate-800">Thêm thiết bị thủ công</h3>
+              <button onClick={() => setShowAddManualModal(false)} className="p-2 hover:bg-slate-200 rounded-xl transition-colors">
+                <X className="w-5 h-5 text-slate-500" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">Địa chỉ IP *</label>
+                <input
+                  type="text"
+                  value={manualIp}
+                  onChange={(e) => setManualIp(e.target.value)}
+                  placeholder="192.168.1.100"
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:outline-none transition-colors font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">Port</label>
+                <input
+                  type="text"
+                  value={manualPort}
+                  onChange={(e) => setManualPort(e.target.value)}
+                  placeholder="3017"
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:outline-none transition-colors font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">Tên máy (tùy chọn)</label>
+                <input
+                  type="text"
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                  placeholder="Máy học sinh 01"
+                  className="w-full px-4 py-3 border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:outline-none transition-colors"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 px-6 py-4 bg-slate-50 border-t border-slate-200">
+              <button
+                onClick={() => setShowAddManualModal(false)}
+                className="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-300 transition-colors"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={addManualDevice}
+                disabled={!manualIp.trim() || isAddingManual}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isAddingManual ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                {isAddingManual ? 'Đang thêm...' : 'Thêm & Kết nối'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
