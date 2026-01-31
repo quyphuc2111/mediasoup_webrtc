@@ -106,9 +106,11 @@ export class MediasoupClient {
 
   private handleMessage(message: { type: string; data?: any }): void {
     const { type, data } = message;
+    console.log(`[MediasoupClient] Received message: ${type}`, data);
 
     // Handle responses to requests
     if (this.pendingRequests.has(type)) {
+      console.log(`[MediasoupClient] Resolving pending request: ${type}`);
       const { resolve } = this.pendingRequests.get(type)!;
       this.pendingRequests.delete(type);
       resolve(data);
@@ -133,8 +135,11 @@ export class MediasoupClient {
         this.events.onChatMessage?.(data);
         break;
       case 'error':
+        console.error(`[MediasoupClient] Server error: ${data.message}`);
         this.events.onError?.(data.message);
         break;
+      default:
+        console.warn(`[MediasoupClient] Unhandled message type: ${type}`);
     }
   }
 
@@ -148,15 +153,17 @@ export class MediasoupClient {
       const responseType = this.getResponseType(type);
       this.pendingRequests.set(responseType, { resolve, reject });
 
+      console.log(`[MediasoupClient] Sending request: ${type}`, data);
       this.ws.send(JSON.stringify({ type, data }));
 
-      // Timeout 15s
+      // Timeout 30s (increased from 15s)
       setTimeout(() => {
         if (this.pendingRequests.has(responseType)) {
           this.pendingRequests.delete(responseType);
+          console.error(`[MediasoupClient] Request ${type} timeout after 30s`);
           reject(new Error(`Request ${type} timeout`));
         }
-      }, 15000);
+      }, 30000);
     });
   }
 
@@ -176,7 +183,9 @@ export class MediasoupClient {
   async createSendTransport(): Promise<void> {
     if (!this.device) throw new Error('Device chưa được khởi tạo');
 
+    console.log('[MediasoupClient] Creating send transport...');
     const params = await this.sendRequest('createTransport', { direction: 'send' });
+    console.log('[MediasoupClient] Send transport params received:', params);
 
     this.sendTransport = this.device.createSendTransport({
       id: params.id,
@@ -187,21 +196,29 @@ export class MediasoupClient {
 
     this.sendTransport.on('connect', async ({ dtlsParameters }: { dtlsParameters: DtlsParameters }, callback: () => void, errback: (error: Error) => void) => {
       try {
+        console.log('[MediasoupClient] Connecting send transport...');
         await this.sendRequest('connectTransport', { direction: 'send', dtlsParameters });
+        console.log('[MediasoupClient] Send transport connected');
         callback();
       } catch (error) {
+        console.error('[MediasoupClient] Send transport connect error:', error);
         errback(error as Error);
       }
     });
 
     this.sendTransport.on('produce', async ({ kind, rtpParameters }: { kind: string; rtpParameters: any }, callback: (params: { id: string }) => void, errback: (error: Error) => void) => {
       try {
+        console.log(`[MediasoupClient] Producing ${kind}...`);
         const { producerId } = await this.sendRequest('produce', { kind, rtpParameters });
+        console.log(`[MediasoupClient] Produced ${kind}: ${producerId}`);
         callback({ id: producerId });
       } catch (error) {
+        console.error(`[MediasoupClient] Produce ${kind} error:`, error);
         errback(error as Error);
       }
     });
+
+    console.log('[MediasoupClient] Send transport created successfully');
   }
 
   async createRecvTransport(): Promise<void> {

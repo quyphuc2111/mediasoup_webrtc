@@ -301,12 +301,15 @@ export function useMediasoup() {
   }, []);
 
   const startScreenShare = useCallback(async (withAudio: boolean = true) => {
-    if (!clientRef.current) return;
+    if (!clientRef.current) {
+      console.error('[ScreenShare] Client not initialized');
+      return;
+    }
 
     try {
       // Check MediaDevices support and log detailed info for debugging
       const support = checkMediaDevicesSupport();
-      console.log('MediaDevices Support Check:', support);
+      console.log('[ScreenShare] MediaDevices Support Check:', support);
       
       if (!support.available || !support.hasGetDisplayMedia) {
         const errorMsg = support.error || 
@@ -315,7 +318,7 @@ export function useMediasoup() {
           '- Cấu hình Tauri cho phép truy cập MediaDevices\n' +
           '- Ứng dụng có quyền truy cập screen recording (macOS)';
         
-        console.error('MediaDevices Debug Info:', {
+        console.error('[ScreenShare] MediaDevices Debug Info:', {
           support,
           navigatorType: typeof navigator,
           windowNavigator: typeof (window as any).navigator,
@@ -353,12 +356,13 @@ export function useMediasoup() {
 
       console.log('[ScreenShare] Requesting display media with options:', displayMediaOptions);
       const screenStream = await mediaDevices.getDisplayMedia(displayMediaOptions);
+      console.log('[ScreenShare] ✅ Got screen stream:', screenStream);
 
       // Log thông tin về tracks được capture
       const videoTracks = screenStream.getVideoTracks();
       const audioTracks = screenStream.getAudioTracks();
-      console.log('[ScreenShare] Video tracks:', videoTracks.length);
-      console.log('[ScreenShare] Audio tracks:', audioTracks.length);
+      console.log('[ScreenShare] Video tracks:', videoTracks.length, videoTracks.map((t: MediaStreamTrack) => ({ id: t.id, label: t.label, enabled: t.enabled })));
+      console.log('[ScreenShare] Audio tracks:', audioTracks.length, audioTracks.map((t: MediaStreamTrack) => ({ id: t.id, label: t.label, enabled: t.enabled })));
       
       if (withAudio && audioTracks.length === 0) {
         console.warn('[ScreenShare] ⚠️ Audio track không được capture! Có thể do:');
@@ -392,21 +396,31 @@ export function useMediasoup() {
         });
       }
 
+      // Set local stream BEFORE producing to ensure UI updates
+      console.log('[ScreenShare] Setting localStream...');
       setLocalStream(screenStream);
+      setIsSharing(true); // Set isSharing immediately after getting stream
+      console.log('[ScreenShare] ✅ localStream and isSharing set');
+      
+      console.log('[ScreenShare] Producing screen to mediasoup...');
       const { audioProducerId } = await clientRef.current.produceScreen(screenStream);
+      console.log('[ScreenShare] ✅ Screen produced, audioProducerId:', audioProducerId);
+      
       screenAudioProducerIdRef.current = audioProducerId;
       setHasScreenAudio(audioProducerId !== null);
       setIsScreenAudioEnabled(audioProducerId !== null);
-      setIsSharing(true);
+      // isSharing already set above
 
       // Handle stream end (user clicks "Stop sharing")
       const videoTrack = screenStream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
+          console.log('[ScreenShare] Video track ended, stopping share...');
           stopScreenShare();
         };
       }
     } catch (err) {
+      console.error('[ScreenShare] ❌ Error:', err);
       setError(err instanceof Error ? err.message : 'Failed to share screen');
     }
   }, [stopScreenShare]);

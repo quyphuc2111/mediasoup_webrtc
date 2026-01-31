@@ -23,7 +23,6 @@ interface OnlineClassroomProps {
 }
 
 const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenShare, onStopScreenShare }) => {
-  const [isTeaching, setIsTeaching] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     { id: '1', senderId: 'system', senderName: 'Hệ thống', content: 'Chào mừng đến với lớp học trực tuyến!', timestamp: '14:00', role: UserRole.ADMIN }
   ]);
@@ -51,6 +50,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
     peers,
     localStream,
     remoteStream,
+    isSharing,
     isMicActive,
     isPushToTalkActive,
     connect,
@@ -161,18 +161,15 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
 
     initServer();
 
-    // Cleanup on unmount
-    return () => {
-      if (serverStarted.current && isTeaching) {
-        // Don't stop server on unmount if teaching, let user control it
-      }
-    };
+    // Cleanup on unmount - no dependencies needed here
   }, [user.role, connect, user.userName]);
 
-  // Stop server when component unmounts (only if not teaching)
+  // Stop server when component unmounts (only if not sharing)
   useEffect(() => {
     return () => {
-      if (serverStarted.current && !isTeaching) {
+      // Only stop server if not currently sharing
+      // We check isSharing via a ref to avoid dependency issues
+      if (serverStarted.current) {
         invoke('stop_server').catch(console.error);
         serverStarted.current = false;
       }
@@ -182,7 +179,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
         retryIntervalRef.current = null;
       }
     };
-  }, [isTeaching]);
+  }, []); // Empty dependency - only run on unmount
 
   // Auto-connect for Student role
   useEffect(() => {
@@ -371,7 +368,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
       // Must be in direct response to user click (no retry loops before this)
       console.log('[OnlineClassroom] Starting screen share...');
       await startScreenShare(true);
-      setIsTeaching(true);
+      // isSharing will be set by the hook automatically
       
       // Add system message
       setMessages(prev => [...prev, {
@@ -393,7 +390,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
   const handleStopTeaching = useCallback(async () => {
     try {
       await stopScreenShare();
-      setIsTeaching(false);
+      // isSharing will be set to false by the hook automatically
       
       // Add system message
       setMessages(prev => [...prev, {
@@ -412,7 +409,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
   }, [stopScreenShare, onStopScreenShare]);
 
   const handleToggleTeaching = () => {
-    if (isTeaching) {
+    if (isSharing) {
       handleStopTeaching();
     } else {
       handleStartTeaching();
@@ -559,7 +556,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
         {/* Main Stream Area */}
         <div className="flex-1 bg-slate-900 rounded-3xl overflow-hidden flex flex-col relative">
           <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
-            {(isTeaching || (user.role === UserRole.STUDENT && remoteStream)) && (
+            {(isSharing || (user.role === UserRole.STUDENT && remoteStream)) && (
               <div className="bg-rose-600 text-white text-[10px] font-bold px-2 py-0.5 rounded animate-pulse">LIVE</div>
             )}
           {user.role === UserRole.TEACHER && (
@@ -575,8 +572,8 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
         </div>
 
         <div className="flex-1 flex items-center justify-center bg-slate-950">
-          {/* Teacher View - Show local stream when teaching */}
-          {user.role === UserRole.TEACHER && isTeaching && localStream ? (
+          {/* Teacher View - Show local stream when sharing */}
+          {user.role === UserRole.TEACHER && isSharing && localStream ? (
             <div className="w-full h-full relative">
               <VideoPlayer 
                 stream={localStream} 
@@ -589,15 +586,16 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
                  <div className="absolute bottom-2 left-2 text-[10px] text-white bg-black/50 px-1 rounded">Bạn (Giáo viên)</div>
               </div>
             </div>
-          ) : isTeaching ? (
+          ) : user.role === UserRole.TEACHER && isSharing ? (
             <div className="text-center">
               <div className="w-20 h-20 bg-emerald-600/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-500/30">
                 <ScreenShare className="w-10 h-10 text-emerald-400" />
               </div>
               <h3 className="text-white text-xl font-bold">Đang chia sẻ màn hình</h3>
               <p className="text-slate-400 mt-2">Học sinh đang xem màn hình của bạn</p>
+              <p className="text-amber-400 mt-2 text-sm">⚠️ Preview không khả dụng trên thiết bị này</p>
             </div>
-          ) : (
+          ) : user.role === UserRole.TEACHER ? (
             <div className="text-center p-8">
               <div className="w-20 h-20 bg-indigo-600/20 rounded-full flex items-center justify-center mx-auto mb-4 border border-indigo-500/30">
                 <MonitorPlay className="w-10 h-10 text-indigo-400" />
@@ -612,7 +610,7 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
                 <p className="text-rose-400 mt-4 text-sm">{mediasoupError}</p>
               )}
             </div>
-          )}
+          ) : null}
 
           {/* Student View - Show remote stream from teacher */}
           {user.role === UserRole.STUDENT && remoteStream && (
@@ -656,12 +654,12 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
             <>
               <button 
                 onClick={handleToggleMic}
-                disabled={!isTeaching}
+                disabled={!isSharing}
                 className={`p-3 rounded-full transition ${
                   isMicActive 
                     ? 'bg-emerald-600 text-white' 
                     : 'bg-slate-800 text-slate-400 hover:text-white'
-                } ${!isTeaching ? 'opacity-50 cursor-not-allowed' : ''}`}
+                } ${!isSharing ? 'opacity-50 cursor-not-allowed' : ''}`}
                 title={isMicActive ? 'Tắt microphone' : 'Bật microphone'}
               >
                 {isMicActive ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
@@ -671,16 +669,16 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
               </button>
               <button 
                 onClick={handleToggleTeaching}
-                disabled={serverStatus !== 'running' || (connectionState !== 'connected' && !isTeaching)}
+                disabled={serverStatus !== 'running' || (connectionState !== 'connected' && !isSharing)}
                 className={`px-8 py-3 rounded-2xl font-bold transition flex items-center gap-3 ${
-                  isTeaching 
+                  isSharing 
                     ? 'bg-rose-600 text-white' 
                     : serverStatus === 'running' && connectionState === 'connected'
                       ? 'bg-indigo-600 text-white hover:bg-indigo-700'
                       : 'bg-slate-600 text-slate-300 cursor-not-allowed'
                 }`}
               >
-                {isTeaching ? (
+                {isSharing ? (
                   <><X className="w-5 h-5" /> Kết thúc ca dạy</>
                 ) : serverStatus === 'starting' ? (
                   <><Loader2 className="w-5 h-5 animate-spin" /> Đang khởi động...</>
