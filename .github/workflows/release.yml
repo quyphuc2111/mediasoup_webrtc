@@ -52,11 +52,35 @@ jobs:
       - name: Build frontend
         run: npm run build
       
-      - name: Build Tauri app
+      - name: Build Tauri app (macOS)
+        if: matrix.platform == 'macos-latest'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "Zenadev@123@"
-        run: npm run tauri build -- --target ${{ matrix.target }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles app
+      
+      - name: Build Tauri app (Windows)
+        if: matrix.platform == 'windows-latest'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles nsis
+      
+      - name: Debug - List Windows build output
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Write-Host "=== Checking build output ==="
+          if (Test-Path "src-tauri/target/release/bundle") {
+            Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse | Select-Object FullName
+          } else {
+            Write-Host "❌ Bundle directory not found"
+          }
+          
+          if (Test-Path "src-tauri/target/${{ matrix.target }}/release/bundle") {
+            Write-Host "=== Found target-specific bundle ==="
+            Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle" -Recurse | Select-Object FullName
+          }
       
       - name: Rename artifacts (macOS)
         if: matrix.platform == 'macos-latest'
