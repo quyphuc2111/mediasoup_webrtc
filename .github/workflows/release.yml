@@ -55,7 +55,7 @@ jobs:
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "Zenadev@123@"
         run: npm run tauri build -- --target ${{ matrix.target }}
       
       - name: Rename artifacts (macOS)
