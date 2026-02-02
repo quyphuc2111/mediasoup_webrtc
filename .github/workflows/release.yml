@@ -56,14 +56,14 @@ jobs:
         if: matrix.platform == 'macos-latest'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "Zenadev@123@"
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles app
       
       - name: Build Tauri app (Windows)
         if: matrix.platform == 'windows-latest'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "Zenadev@123@"
         run: npm run tauri build -- --target ${{ matrix.target }} --bundles nsis
       
       - name: Debug - List Windows build output
