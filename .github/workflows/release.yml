@@ -102,8 +102,8 @@ jobs:
         run: |
           $VERSION = $env:GITHUB_REF -replace 'refs/tags/v', ''
           
-          # Windows build path doesn't include target
-          $BundlePath = "src-tauri/target/release/bundle/nsis"
+          # Windows build uses target-specific path
+          $BundlePath = "src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
           
           if (Test-Path $BundlePath) {
             cd $BundlePath
@@ -117,8 +117,11 @@ jobs:
               Rename-Item $ZipFile.Name "SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip"
               Rename-Item $SigFile.Name "SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip.sig"
               Write-Host "✅ Renamed Windows artifacts"
+              Write-Host "  - SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip"
+              Write-Host "  - SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip.sig"
             } else {
               Write-Host "⚠️ No zip or sig files found"
+              exit 1
             }
           } else {
             Write-Host "❌ Bundle path not found: $BundlePath"
@@ -140,8 +143,8 @@ jobs:
         with:
           name: windows-${{ matrix.arch }}-artifacts
           path: |
-            src-tauri/target/release/bundle/nsis/*.zip
-            src-tauri/target/release/bundle/nsis/*.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
   
   release:
     needs: build
