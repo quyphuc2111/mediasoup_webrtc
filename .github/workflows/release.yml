@@ -71,15 +71,21 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "=== Checking build output ==="
-          if (Test-Path "src-tauri/target/release/bundle") {
-            Get-ChildItem -Path "src-tauri/target/release/bundle" -Recurse | Select-Object FullName
+          $BundlePath = "src-tauri/target/${{ matrix.target }}/release/bundle/nsis"
+          
+          if (Test-Path $BundlePath) {
+            Write-Host "✅ Bundle path exists: $BundlePath"
+            Write-Host "=== Files in bundle directory ==="
+            Get-ChildItem -Path $BundlePath | ForEach-Object {
+              Write-Host "  - $($_.Name) ($($_.Length) bytes)"
+            }
           } else {
-            Write-Host "❌ Bundle directory not found"
+            Write-Host "❌ Bundle path not found: $BundlePath"
           }
           
+          Write-Host "`n=== All bundle directories ==="
           if (Test-Path "src-tauri/target/${{ matrix.target }}/release/bundle") {
-            Write-Host "=== Found target-specific bundle ==="
-            Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle" -Recurse | Select-Object FullName
+            Get-ChildItem -Path "src-tauri/target/${{ matrix.target }}/release/bundle" -Recurse -File | Select-Object FullName, Length
           }
       
       - name: Rename artifacts (macOS)
