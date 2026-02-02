@@ -63,11 +63,11 @@ if (fs.existsSync(macosArm64Sig)) {
 }
 
 // Windows x86_64
-const windowsX64Sig = path.join(bundleDir, 'nsis', `SmartlabPromax_${version}_x64-setup.nsis.zip.sig`);
+const windowsX64Sig = path.join(bundleDir, 'nsis', `SmartlabPromax_${version}_x64-setup.exe.sig`);
 if (fs.existsSync(windowsX64Sig)) {
   manifest.platforms['windows-x86_64'] = {
     signature: readSignature(windowsX64Sig),
-    url: `https://github.com/${repo}/releases/download/v${version}/SmartlabPromax_${version}_x64-setup.nsis.zip`
+    url: `https://github.com/${repo}/releases/download/v${version}/SmartlabPromax_${version}_x64-setup.exe`
   };
   foundPlatforms++;
   console.log('✅ Found Windows x86_64 package');

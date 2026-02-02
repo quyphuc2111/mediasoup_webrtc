@@ -114,19 +114,19 @@ jobs:
           if (Test-Path $BundlePath) {
             cd $BundlePath
             
-            # Find the zip file
-            $ZipFile = Get-ChildItem *.nsis.zip | Select-Object -First 1
-            $SigFile = Get-ChildItem *.nsis.zip.sig | Select-Object -First 1
+            # Find the exe file (already has version in name)
+            $ExeFile = Get-ChildItem *.exe -Exclude *.sig | Select-Object -First 1
+            $SigFile = Get-ChildItem *.exe.sig | Select-Object -First 1
             
-            if ($ZipFile -and $SigFile) {
-              # Rename with version and arch
-              Rename-Item $ZipFile.Name "SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip"
-              Rename-Item $SigFile.Name "SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip.sig"
-              Write-Host "✅ Renamed Windows artifacts"
-              Write-Host "  - SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip"
-              Write-Host "  - SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip.sig"
+            if ($ExeFile -and $SigFile) {
+              Write-Host "✅ Found Windows artifacts:"
+              Write-Host "  - $($ExeFile.Name)"
+              Write-Host "  - $($SigFile.Name)"
+              
+              # Files already have correct naming from Tauri
+              # Just verify they exist
             } else {
-              Write-Host "⚠️ No zip or sig files found"
+              Write-Host "⚠️ No exe or sig files found"
               exit 1
             }
           } else {
@@ -149,7 +149,7 @@ jobs:
         with:
           name: windows-${{ matrix.arch }}-artifacts
           path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
   
   release:
@@ -191,7 +191,7 @@ jobs:
           
           # Copy Windows artifacts
           if [ -d "artifacts/windows-x64-artifacts" ]; then
-            cp artifacts/windows-x64-artifacts/*.zip src-tauri/target/release/bundle/nsis/ || true
+            cp artifacts/windows-x64-artifacts/*.exe src-tauri/target/release/bundle/nsis/ || true
             cp artifacts/windows-x64-artifacts/*.sig src-tauri/target/release/bundle/nsis/ || true
           fi
       
@@ -206,7 +206,7 @@ jobs:
         with:
           files: |
             artifacts/**/*.tar.gz
-            artifacts/**/*.zip
+            artifacts/**/*.exe
             artifacts/**/*.sig
             latest.json
           body: |
@@ -219,7 +219,7 @@ jobs:
             - Intel: `SmartlabPromax_*_x64.app.tar.gz`
             
             **Windows:**
-            - `SmartlabPromax_*_x64-setup.nsis.zip`
+            - `SmartlabPromax_*_x64-setup.exe`
             
             ### 🔄 Auto Update
             If you already have the app installed, it will automatically check for this update.
@@ -233,9 +233,9 @@ jobs:
             4. First time: Right-click → Open (to bypass Gatekeeper)
             
             **Windows:**
-            1. Download the `.zip` file
-            2. Extract the installer
-            3. Run the setup executable
+            1. Download the `.exe` installer
+            2. Run the installer
+            3. Follow the installation wizard
             
             ### 🔐 Verification
             All packages are signed and verified automatically by the updater.
