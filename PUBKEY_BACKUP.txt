@@ -1,0 +1,23 @@
+# Public Key Backup
+
+Sau khi release 0.1.0 thành công, thêm lại pubkey vào tauri.conf.json:
+
+```json
+"plugins": {
+  "updater": {
+    "active": true,
+    "endpoints": [
+      "https://github.com/quyphuc2111/mediasoup_webrtc/releases/latest/download/latest.json"
+    ],
+    "dialog": true,
+    "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGMTI2ODgxMzlCNzFDMjMKUldRakhMYzVnV2dTVDRKRC9aODQ3cXJHeW1zNndkS2FmM2h5eGVVblF4WlZKczJSREZIRk1HdC8K"
+  }
+}
+```
+
+Pubkey này cần có để app có thể verify updates từ v0.2.0 trở đi.
+
+Workflow:
+1. Release 0.1.0 (không có pubkey trong config - first release)
+2. Thêm pubkey vào config
+3. Release 0.2.0+ (có pubkey - app sẽ verify signature)

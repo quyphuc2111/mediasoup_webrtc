@@ -4,258 +4,193 @@ on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag (e.g., v1.0.0)'
-        required: false
-        default: 'v0.0.0-dev'
-
-permissions:
-  contents: write
 
 jobs:
-  build-windows:
-    name: Build Windows (exe)
-    runs-on: windows-latest
-
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            arch: x64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: x64
+    
+    runs-on: ${{ matrix.platform }}
+    
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
+      
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install Rust toolchain
+          node-version: 18
+      
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
+          targets: ${{ matrix.target }}
+      
+      - name: Install dependencies
+        run: npm install
+      
       - name: Install mediasoup-server dependencies
-        run: npm ci
-        working-directory: mediasoup-server
-
+        run: cd mediasoup-server && npm install
+      
       - name: Build mediasoup-server
+        run: cd mediasoup-server && npm run build
+      
+      - name: Prepare binaries
+        run: npm run prepare:binaries
+      
+      - name: Build frontend
         run: npm run build
-        working-directory: mediasoup-server
-
-      - name: Download Node.js portable for Windows
-        shell: bash
+      
+      - name: Build Tauri app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: npm run tauri build -- --target ${{ matrix.target }}
+      
+      - name: Rename artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
         run: |
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            echo "Attempt $((RETRY_COUNT + 1)) of $MAX_RETRIES to download Node.js..."
-            if curl -L --connect-timeout 30 --max-time 300 --retry 3 --retry-delay 5 -o node.zip https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip; then
-              echo "Download successful!"
-              break
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                echo "Download failed, retrying in 10 seconds..."
-                sleep 10
-              else
-                echo "Download failed after $MAX_RETRIES attempts"
-                exit 1
-              fi
-            fi
-          done
+          VERSION=${GITHUB_REF#refs/tags/v}
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
           
-          if [ ! -f node.zip ] || [ ! -s node.zip ]; then
-            echo "Error: node.zip is missing or empty"
-            exit 1
+          # Find the tar.gz file
+          TAR_FILE=$(ls *.app.tar.gz | head -n 1)
+          SIG_FILE=$(ls *.app.tar.gz.sig | head -n 1)
+          
+          # Rename with version and arch
+          mv "$TAR_FILE" "SmartlabPromax_${VERSION}_${{ matrix.arch }}.app.tar.gz"
+          mv "$SIG_FILE" "SmartlabPromax_${VERSION}_${{ matrix.arch }}.app.tar.gz.sig"
+      
+      - name: Rename artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $VERSION = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          cd src-tauri/target/${{ matrix.target }}/release/bundle/nsis
+          
+          # Find the zip file
+          $ZipFile = Get-ChildItem *.nsis.zip | Select-Object -First 1
+          $SigFile = Get-ChildItem *.nsis.zip.sig | Select-Object -First 1
+          
+          # Rename with version and arch
+          Rename-Item $ZipFile.Name "SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip"
+          Rename-Item $SigFile.Name "SmartlabPromax_${VERSION}_${{ matrix.arch }}-setup.nsis.zip.sig"
+      
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-artifacts
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.sig
+      
+      - name: Upload artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}-artifacts
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.sig
+  
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Organize artifacts
+        run: |
+          mkdir -p src-tauri/target/release/bundle/macos
+          mkdir -p src-tauri/target/release/bundle/nsis
+          
+          # Copy macOS artifacts
+          if [ -d "artifacts/macos-aarch64-artifacts" ]; then
+            cp artifacts/macos-aarch64-artifacts/*.tar.gz src-tauri/target/release/bundle/macos/ || true
+            cp artifacts/macos-aarch64-artifacts/*.sig src-tauri/target/release/bundle/macos/ || true
           fi
           
-          echo "Extracting Node.js..."
-          unzip -q node.zip
-          mkdir -p src-tauri/binaries/node
-          mv node-v20.18.0-win-x64/* src-tauri/binaries/node/
-          echo "Node.js extracted successfully"
-
-      - name: Prepare mediasoup-server sidecar
-        shell: bash
+          if [ -d "artifacts/macos-x64-artifacts" ]; then
+            cp artifacts/macos-x64-artifacts/*.tar.gz src-tauri/target/release/bundle/macos/ || true
+            cp artifacts/macos-x64-artifacts/*.sig src-tauri/target/release/bundle/macos/ || true
+          fi
+          
+          # Copy Windows artifacts
+          if [ -d "artifacts/windows-x64-artifacts" ]; then
+            cp artifacts/windows-x64-artifacts/*.zip src-tauri/target/release/bundle/nsis/ || true
+            cp artifacts/windows-x64-artifacts/*.sig src-tauri/target/release/bundle/nsis/ || true
+          fi
+      
+      - name: Generate manifest
         run: |
-          mkdir -p src-tauri/binaries/server
-          cp -r mediasoup-server/dist src-tauri/binaries/server/
-          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
-          cp mediasoup-server/package.json src-tauri/binaries/server/
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Build Tauri app (Windows)
-        uses: tauri-apps/tauri-action@v0
+          VERSION=${GITHUB_REF#refs/tags/v}
+          REPO=${{ github.repository }}
+          node scripts/generate-github-manifest.cjs "$VERSION" "$REPO" "Release v$VERSION"
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.sig
+            latest.json
+          body: |
+            ## 🎉 SmartLab ProMax ${{ github.ref_name }}
+            
+            ### 📦 Downloads
+            
+            **macOS:**
+            - Apple Silicon (M1/M2/M3): `SmartlabPromax_*_aarch64.app.tar.gz`
+            - Intel: `SmartlabPromax_*_x64.app.tar.gz`
+            
+            **Windows:**
+            - `SmartlabPromax_*_x64-setup.nsis.zip`
+            
+            ### 🔄 Auto Update
+            If you already have the app installed, it will automatically check for this update.
+            
+            ### 📝 Installation
+            
+            **macOS:**
+            1. Download the appropriate `.tar.gz` file for your Mac
+            2. Extract: `tar -xzf SmartlabPromax_*.app.tar.gz`
+            3. Move `SmartlabPromax.app` to Applications folder
+            4. First time: Right-click → Open (to bypass Gatekeeper)
+            
+            **Windows:**
+            1. Download the `.zip` file
+            2. Extract the installer
+            3. Run the setup executable
+            
+            ### 🔐 Verification
+            All packages are signed and verified automatically by the updater.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name || github.event.inputs.version }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
-          releaseBody: |
-            ## SmartlabPromax - Phần mềm quản lý phòng máy
-            
-            ### Tính năng:
-            - 🖥️ Chia sẻ màn hình giáo viên (WebRTC/Mediasoup)
-            - 👁️ Xem màn hình học sinh real-time
-            - 🖱️ Điều khiển từ xa
-            - 📤 Gửi/nhận file qua LAN
-            - 🔐 Xác thực Ed25519 & LDAP
-            - 🌐 Tự động phát hiện thiết bị LAN
-            - 💬 Chat real-time trong lớp học
-            - 🗄️ Quản lý database SQLite
-            
-            ### Cài đặt Windows:
-            1. Tải file `.exe` (NSIS installer)
-            2. Chạy file để cài đặt
-            3. Khởi động ứng dụng từ Start Menu
-            
-            ### Yêu cầu hệ thống:
-            - Windows 10/11 (64-bit)
-            - RAM: 4GB+
-            - Disk: 500MB+
-          releaseDraft: false
-          prerelease: false
-          args: --target x86_64-pc-windows-msvc --bundles nsis
-
-  build-macos:
-    name: Build macOS (dmg)
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Install mediasoup-server dependencies
-        run: npm ci
-        working-directory: mediasoup-server
-
-      - name: Build mediasoup-server
-        run: npm run build
-        working-directory: mediasoup-server
-
-      - name: Download Node.js portable for macOS (Intel)
-        run: |
-          curl -L -o node-intel.tar.gz https://nodejs.org/dist/v20.18.0/node-v20.18.0-darwin-x64.tar.gz
-          mkdir -p src-tauri/binaries/node-x64
-          tar -xzf node-intel.tar.gz -C src-tauri/binaries/node-x64 --strip-components=1
-
-      - name: Download Node.js portable for macOS (ARM)
-        run: |
-          curl -L -o node-arm.tar.gz https://nodejs.org/dist/v20.18.0/node-v20.18.0-darwin-arm64.tar.gz
-          mkdir -p src-tauri/binaries/node-arm64
-          tar -xzf node-arm.tar.gz -C src-tauri/binaries/node-arm64 --strip-components=1
-
-      - name: Prepare mediasoup-server sidecar
-        run: |
-          mkdir -p src-tauri/binaries/server
-          cp -r mediasoup-server/dist src-tauri/binaries/server/
-          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
-          cp mediasoup-server/package.json src-tauri/binaries/server/
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Build Tauri app (macOS Universal)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name || github.event.inputs.version }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
-          releaseDraft: false
-          prerelease: false
-          args: --target universal-apple-darwin --bundles dmg
-
-  build-linux:
-    name: Build Linux (deb/AppImage)
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Install mediasoup-server dependencies
-        run: npm ci
-        working-directory: mediasoup-server
-
-      - name: Build mediasoup-server
-        run: npm run build
-        working-directory: mediasoup-server
-
-      - name: Download Node.js portable for Linux
-        run: |
-          curl -L -o node.tar.xz https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.xz
-          mkdir -p src-tauri/binaries/node
-          tar -xJf node.tar.xz -C src-tauri/binaries/node --strip-components=1
-
-      - name: Prepare mediasoup-server sidecar
-        run: |
-          mkdir -p src-tauri/binaries/server
-          cp -r mediasoup-server/dist src-tauri/binaries/server/
-          cp -r mediasoup-server/node_modules src-tauri/binaries/server/
-          cp mediasoup-server/package.json src-tauri/binaries/server/
-
-      - name: Build frontend
-        run: npm run build
-
-      - name: Build Tauri app (Linux)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name || github.event.inputs.version }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
-          releaseDraft: false
-          prerelease: false
-          args: --bundles deb,appimage

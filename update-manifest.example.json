@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "notes": "## 🎉 Phiên bản 0.2.0\n\n### ✨ Tính năng mới\n- Thêm chức năng phân phối tài liệu\n- Auto updater tự động\n- Cải thiện UI/UX\n\n### 🐛 Sửa lỗi\n- Sửa lỗi kết nối WebRTC\n- Khắc phục vấn đề screen capture\n\n### ⚡ Cải thiện\n- Tăng hiệu suất 30%\n- Giảm memory usage\n- Tối ưu network bandwidth",
+  "pub_date": "2024-01-15T12:00:00Z",
+  "platforms": {
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkK",
+      "url": "https://your-server.com/updates/SmartlabPromax_0.2.0_x64.app.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkK",
+      "url": "https://your-server.com/updates/SmartlabPromax_0.2.0_aarch64.app.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkK",
+      "url": "https://your-server.com/updates/SmartlabPromax_0.2.0_x64-setup.nsis.zip"
+    },
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NTY3ODkK",
+      "url": "https://your-server.com/updates/SmartlabPromax_0.2.0_amd64.AppImage.tar.gz"
+    }
+  }
+}

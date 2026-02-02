@@ -25,4 +25,12 @@ dist-student/
 *.sw?
 .cursor/
 .agent/
+
+# Tauri updater private keys (NEVER COMMIT!)
+*.key
+.tauri/
+
+# Update manifests (generated)
+update-manifest.json
+
 # labmaster

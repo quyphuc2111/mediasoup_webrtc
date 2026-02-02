@@ -25,12 +25,19 @@
     "server:install": "cd mediasoup-server && npm install",
     "server:dev": "cd mediasoup-server && npm run dev",
     "server:build": "cd mediasoup-server && npm run build",
-    "rename:rules": "node scripts/rename-md-to-mdc.js"
+    "rename:rules": "node scripts/rename-md-to-mdc.js",
+    "updater:generate-key": "cd src-tauri && tauri signer generate -w ~/.tauri/smartlab.key",
+    "updater:sign": "./scripts/sign-updates.sh",
+    "updater:manifest": "node scripts/generate-update-manifest.cjs",
+    "updater:github-manifest": "node scripts/generate-github-manifest.cjs",
+    "updater:release-github": "./scripts/release-github.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.9.0",
     "lucide-react": "^0.563.0",
     "mediasoup-client": "^3.7.17",
     "react": "^19.1.0",

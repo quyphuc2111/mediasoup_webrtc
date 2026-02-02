@@ -1,0 +1,11 @@
+{
+  "version": "0.1.0",
+  "notes": "Initial release",
+  "pub_date": "2026-02-02T03:57:29.398Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRakhMYzVnV2dTVDVwbFprS05yR3hjZk11U25tWXFIeW1UZWptY3BXZWt3U1VibVBzOXNnUE1GNWduTTFTVi9CYkIwTC9YL0VsOGdqY0RzaUwza2xFaFN0TDhCLytwbEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzcwMDA0NDg5CWZpbGU6U21hcnRsYWJQcm9tYXguYXBwLnRhci5negpvOUxGZFhKaDYrLzRubXRhdktnU3VWUXh3NXVkSTF6NWhDTFY0VVZGYkYrZ3hFa1IzOERPZGN0WFV1QTJwMFdPaXp3bHFiYkFVZllMM1ZCZjJyYnFBUT09Cg==",
+      "url": "https://github.com/quyphuc2111/mediasoup_webrtc/releases/download/v0.1.0/SmartlabPromax_0.1.0_aarch64.app.tar.gz"
+    }
+  }
+}
