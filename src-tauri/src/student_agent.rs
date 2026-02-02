@@ -28,7 +28,7 @@ pub enum AgentStatus {
     Starting,
     WaitingForTeacher,
     Authenticating,
-    Connected { teacher_name: String },
+    Connected { teacher_name: String, teacher_ip: String },
     Error { message: String },
 }
 
@@ -125,6 +125,22 @@ pub enum TeacherMessage {
     ListDirectory {
         path: String,
     },
+
+    #[serde(rename = "shutdown")]
+    Shutdown {
+        delay_seconds: Option<u32>,
+    },
+
+    #[serde(rename = "restart")]
+    Restart {
+        delay_seconds: Option<u32>,
+    },
+
+    #[serde(rename = "lock_screen")]
+    LockScreen,
+
+    #[serde(rename = "logout")]
+    Logout,
 }
 
 /// Messages from student to teacher
@@ -164,6 +180,13 @@ pub enum StudentMessage {
     DirectoryListing {
         path: String,
         files: Vec<crate::file_transfer::FileInfo>,
+    },
+
+    #[serde(rename = "system_command_result")]
+    SystemCommandResult {
+        command: String,
+        success: bool,
+        message: String,
     },
 
     #[serde(rename = "error")]
@@ -280,8 +303,10 @@ async fn handle_connection(
     }
 
     // Auto-connect: set status to Connected and start screen capture immediately
+    let teacher_ip = addr.ip().to_string();
     state.set_status(AgentStatus::Connected {
         teacher_name: "Teacher".to_string(),
+        teacher_ip,
     });
 
     // AUTO-START SCREEN CAPTURE on connection
@@ -534,6 +559,74 @@ where
                     send_message(write, &response).await?;
                 }
             }
+        }
+
+        TeacherMessage::Shutdown { delay_seconds } => {
+            let delay = delay_seconds.unwrap_or(0);
+            log::info!("[StudentAgent] Shutdown requested with delay: {}s", delay);
+            
+            let response = StudentMessage::SystemCommandResult {
+                command: "shutdown".to_string(),
+                success: true,
+                message: format!("Máy sẽ tắt sau {} giây", delay),
+            };
+            send_message(write, &response).await?;
+            
+            // Execute shutdown command in background
+            std::thread::spawn(move || {
+                if delay > 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(delay as u64));
+                }
+                execute_shutdown();
+            });
+        }
+
+        TeacherMessage::Restart { delay_seconds } => {
+            let delay = delay_seconds.unwrap_or(0);
+            log::info!("[StudentAgent] Restart requested with delay: {}s", delay);
+            
+            let response = StudentMessage::SystemCommandResult {
+                command: "restart".to_string(),
+                success: true,
+                message: format!("Máy sẽ khởi động lại sau {} giây", delay),
+            };
+            send_message(write, &response).await?;
+            
+            // Execute restart command in background
+            std::thread::spawn(move || {
+                if delay > 0 {
+                    std::thread::sleep(std::time::Duration::from_secs(delay as u64));
+                }
+                execute_restart();
+            });
+        }
+
+        TeacherMessage::LockScreen => {
+            log::info!("[StudentAgent] Lock screen requested");
+            
+            let result = execute_lock_screen();
+            let response = StudentMessage::SystemCommandResult {
+                command: "lock_screen".to_string(),
+                success: result.is_ok(),
+                message: result.unwrap_or_else(|e| e),
+            };
+            send_message(write, &response).await?;
+        }
+
+        TeacherMessage::Logout => {
+            log::info!("[StudentAgent] Logout requested");
+            
+            let response = StudentMessage::SystemCommandResult {
+                command: "logout".to_string(),
+                success: true,
+                message: "Đang đăng xuất...".to_string(),
+            };
+            send_message(write, &response).await?;
+            
+            // Execute logout in background
+            std::thread::spawn(|| {
+                execute_logout();
+            });
         }
     }
 
@@ -1239,6 +1332,146 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
 
     state.set_status(AgentStatus::Stopped);
     Ok(())
+}
+
+// ============================================================================
+// System Command Functions (Shutdown, Restart, Lock, Logout)
+// ============================================================================
+
+/// Execute system shutdown command
+fn execute_shutdown() {
+    log::info!("[StudentAgent] Executing shutdown command...");
+    
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("shutdown")
+            .args(&["/s", "/t", "0"])
+            .spawn();
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(&["-e", "tell app \"System Events\" to shut down"])
+            .spawn();
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("shutdown")
+            .args(&["-h", "now"])
+            .spawn();
+    }
+}
+
+/// Execute system restart command
+fn execute_restart() {
+    log::info!("[StudentAgent] Executing restart command...");
+    
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("shutdown")
+            .args(&["/r", "/t", "0"])
+            .spawn();
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(&["-e", "tell app \"System Events\" to restart"])
+            .spawn();
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("shutdown")
+            .args(&["-r", "now"])
+            .spawn();
+    }
+}
+
+/// Execute lock screen command
+fn execute_lock_screen() -> Result<String, String> {
+    log::info!("[StudentAgent] Executing lock screen command...");
+    
+    #[cfg(target_os = "windows")]
+    {
+        let result = std::process::Command::new("rundll32.exe")
+            .args(&["user32.dll,LockWorkStation"])
+            .output();
+        
+        match result {
+            Ok(_) => Ok("Màn hình đã được khóa".to_string()),
+            Err(e) => Err(format!("Không thể khóa màn hình: {}", e)),
+        }
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        // Use pmset to lock screen on macOS
+        let result = std::process::Command::new("pmset")
+            .args(&["displaysleepnow"])
+            .output();
+        
+        match result {
+            Ok(_) => Ok("Màn hình đã được khóa".to_string()),
+            Err(e) => Err(format!("Không thể khóa màn hình: {}", e)),
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Try different lock commands for different desktop environments
+        let commands = [
+            ("gnome-screensaver-command", vec!["-l"]),
+            ("xdg-screensaver", vec!["lock"]),
+            ("loginctl", vec!["lock-session"]),
+        ];
+        
+        for (cmd, args) in commands.iter() {
+            if let Ok(output) = std::process::Command::new(cmd).args(args).output() {
+                if output.status.success() {
+                    return Ok("Màn hình đã được khóa".to_string());
+                }
+            }
+        }
+        
+        Err("Không thể khóa màn hình - không tìm thấy lệnh phù hợp".to_string())
+    }
+}
+
+/// Execute logout command
+fn execute_logout() {
+    log::info!("[StudentAgent] Executing logout command...");
+    
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("shutdown")
+            .args(&["/l"])
+            .spawn();
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("osascript")
+            .args(&["-e", "tell app \"System Events\" to log out"])
+            .spawn();
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Try different logout commands
+        let commands = [
+            ("gnome-session-quit", vec!["--logout", "--no-prompt"]),
+            ("loginctl", vec!["terminate-user", &whoami::username()]),
+        ];
+        
+        for (cmd, args) in commands.iter() {
+            if std::process::Command::new(cmd).args(args).spawn().is_ok() {
+                return;
+            }
+        }
+    }
 }
 
 /// Stop the student agent server

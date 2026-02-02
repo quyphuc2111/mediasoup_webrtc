@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { 
   Monitor, Grid, List, CheckCircle2, 
   Eye, MousePointer, FolderOpen, Wifi, WifiOff, RefreshCw, Loader2,
-  Trash2, Link, Unlink, Maximize2, X, Minimize2, Plus
+  Trash2, Link, Unlink, Maximize2, X, Minimize2, Plus, Power, RotateCcw, Lock, LogOut, MoreVertical
 } from 'lucide-react';
 import { RoomComputer } from '../types';
 import { H264VideoPlayer } from '../components/H264VideoPlayer';
@@ -110,6 +110,14 @@ const LabControl: React.FC<LabControlProps> = () => {
   const [manualPort, setManualPort] = useState('3017');
   const [manualName, setManualName] = useState('');
   const [isAddingManual, setIsAddingManual] = useState(false);
+
+  // System commands state
+  const [systemMenuStudent, setSystemMenuStudent] = useState<string | null>(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState<{
+    type: 'shutdown' | 'restart' | 'logout';
+    studentId: string;
+    studentName: string;
+  } | null>(null);
 
   // Remote control refs
   const screenContainerRef = useRef<HTMLDivElement>(null);
@@ -270,6 +278,50 @@ const LabControl: React.FC<LabControlProps> = () => {
       alert(`Lỗi: ${error}`);
     } finally {
       setIsAddingManual(false);
+    }
+  };
+
+  // System command functions
+  const sendShutdown = async (studentId: string, delaySeconds?: number) => {
+    try {
+      await invoke('send_shutdown_command', { studentId, delaySeconds });
+      setShowConfirmDialog(null);
+      setSystemMenuStudent(null);
+    } catch (error) {
+      console.error('Failed to send shutdown command:', error);
+      alert(`Lỗi: ${error}`);
+    }
+  };
+
+  const sendRestart = async (studentId: string, delaySeconds?: number) => {
+    try {
+      await invoke('send_restart_command', { studentId, delaySeconds });
+      setShowConfirmDialog(null);
+      setSystemMenuStudent(null);
+    } catch (error) {
+      console.error('Failed to send restart command:', error);
+      alert(`Lỗi: ${error}`);
+    }
+  };
+
+  const sendLockScreen = async (studentId: string) => {
+    try {
+      await invoke('send_lock_screen_command', { studentId });
+      setSystemMenuStudent(null);
+    } catch (error) {
+      console.error('Failed to send lock screen command:', error);
+      alert(`Lỗi: ${error}`);
+    }
+  };
+
+  const sendLogout = async (studentId: string) => {
+    try {
+      await invoke('send_logout_command', { studentId });
+      setShowConfirmDialog(null);
+      setSystemMenuStudent(null);
+    } catch (error) {
+      console.error('Failed to send logout command:', error);
+      alert(`Lỗi: ${error}`);
     }
   };
 
@@ -465,31 +517,46 @@ const LabControl: React.FC<LabControlProps> = () => {
     const isViewing = conn?.status === 'Viewing';
 
     return (
-      <div className="fixed inset-0 z-50 bg-black flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800">
+      <div className="fixed inset-0 z-[9999] bg-black flex flex-col overflow-hidden" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
+        {/* Header - fixed height */}
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800">
           <div className="flex items-center gap-4">
             <h2 className="text-xl font-black text-white">{selectedComputer.computerName}</h2>
             <span className="text-sm text-slate-400 font-mono">{selectedComputer.ipAddress}</span>
             {frame && <span className="text-xs text-slate-500">{frame.width}x{frame.height}</span>}
           </div>
-          <button onClick={closeView} className="p-2 bg-slate-800 hover:bg-rose-600 rounded-xl text-white transition-colors">
-            <X className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-3">
+            <button onClick={() => { setActiveViewMode('control'); setRemoteControlEnabled(true); }}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white text-sm font-bold transition-colors">
+              <MousePointer className="w-4 h-4" /> Điều khiển
+            </button>
+            <button onClick={closeView} className="p-2 bg-slate-800 hover:bg-rose-600 rounded-xl text-white transition-colors">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
-        {/* Screen */}
-        <div className="flex-1 flex items-center justify-center p-4 bg-black">
-          {isViewing && frame ? (
-            <div className="w-full h-full max-w-full max-h-full">
-              <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center text-white">
-              <Loader2 className="w-12 h-12 animate-spin mb-4 text-indigo-400" />
-              <span className="text-slate-400">Đang tải màn hình...</span>
-            </div>
-          )}
+        {/* Screen - scrollable if needed */}
+        <div className="flex-1 min-h-0 overflow-auto bg-black">
+          <div className="min-h-full flex items-center justify-center p-2">
+            {isViewing && frame ? (
+              <div 
+                style={{ 
+                  width: '100%',
+                  height: '100%',
+                  maxWidth: frame.width > 0 ? `${frame.width}px` : '100%',
+                  aspectRatio: frame.width && frame.height ? `${frame.width}/${frame.height}` : 'auto'
+                }}
+              >
+                <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-white">
+                <Loader2 className="w-12 h-12 animate-spin mb-4 text-indigo-400" />
+                <span className="text-slate-400">Đang tải màn hình...</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -503,13 +570,13 @@ const LabControl: React.FC<LabControlProps> = () => {
     const isViewing = conn?.status === 'Viewing';
 
     return (
-      <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
+      <div className="fixed inset-0 z-[9999] bg-black flex flex-col overflow-hidden" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
         {/* Hidden keyboard input */}
         <input ref={keyboardInputRef} type="text" className="absolute opacity-0 pointer-events-none" 
           onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} tabIndex={-1} />
 
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-800">
+        {/* Header - fixed height */}
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-800">
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-black text-white">{selectedComputer.computerName}</h2>
             <span className="text-sm text-slate-400 font-mono">{selectedComputer.ipAddress}</span>
@@ -530,25 +597,39 @@ const LabControl: React.FC<LabControlProps> = () => {
           </div>
         </div>
 
-        {/* Screen with remote control */}
-        <div className="flex-1 flex items-center justify-center p-4">
-          {isViewing && frame ? (
-            <div ref={screenContainerRef} className="w-full h-full max-w-full max-h-full cursor-crosshair"
-              onMouseMove={handleMouseMove} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp}
-              onContextMenu={handleContextMenu} onWheel={handleWheel}>
-              <H264VideoPlayer frame={frame} className="w-full h-full object-contain pointer-events-none" connectionId={conn!.id} />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center text-white">
-              <Loader2 className="w-12 h-12 animate-spin mb-4 text-indigo-400" />
-              <span className="text-slate-400">Đang tải màn hình...</span>
-            </div>
-          )}
+        {/* Screen with remote control - scrollable if needed */}
+        <div className="flex-1 min-h-0 overflow-auto bg-black">
+          <div className="min-h-full flex items-center justify-center p-2">
+            {isViewing && frame ? (
+              <div 
+                ref={screenContainerRef} 
+                className="cursor-crosshair"
+                style={{ 
+                  width: '100%',
+                  height: '100%',
+                  maxWidth: frame.width > 0 ? `${frame.width}px` : '100%',
+                  aspectRatio: frame.width && frame.height ? `${frame.width}/${frame.height}` : 'auto'
+                }}
+                onMouseMove={handleMouseMove} 
+                onMouseDown={handleMouseDown} 
+                onMouseUp={handleMouseUp}
+                onContextMenu={handleContextMenu} 
+                onWheel={handleWheel}
+              >
+                <H264VideoPlayer frame={frame} className="w-full h-full object-contain pointer-events-none" connectionId={conn!.id} />
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-white">
+                <Loader2 className="w-12 h-12 animate-spin mb-4 text-indigo-400" />
+                <span className="text-slate-400">Đang tải màn hình...</span>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Footer hint */}
-        <div className="px-6 py-2 bg-slate-900 border-t border-slate-800 text-center">
-          <span className="text-xs text-slate-500">Click vào màn hình để điều khiển chuột • Gõ phím để điều khiển bàn phím</span>
+        {/* Footer hint - fixed height */}
+        <div className="flex-shrink-0 px-6 py-2 bg-slate-900 border-t border-slate-800 text-center">
+          <span className="text-xs text-slate-500">Click vào màn hình để điều khiển chuột • Gõ phím để điều khiển bàn phím • Cuộn để xem toàn bộ</span>
         </div>
       </div>
     );
@@ -732,10 +813,57 @@ const LabControl: React.FC<LabControlProps> = () => {
                       </>
                     )}
                     {isConnected && conn && (
-                      <button onClick={() => disconnectStudent(conn.id)}
-                        className="p-2 bg-rose-600 text-white rounded-xl hover:bg-rose-500 transition-colors" title="Ngắt kết nối">
-                        <Unlink className="w-3 h-3" />
-                      </button>
+                      <>
+                        {/* System Commands Menu */}
+                        <div className="relative">
+                          <button 
+                            onClick={() => setSystemMenuStudent(systemMenuStudent === conn.id ? null : conn.id)}
+                            className="p-2 bg-amber-600 text-white rounded-xl hover:bg-amber-500 transition-colors" 
+                            title="Điều khiển hệ thống"
+                          >
+                            <MoreVertical className="w-3 h-3" />
+                          </button>
+                          
+                          {/* Dropdown Menu */}
+                          {systemMenuStudent === conn.id && (
+                            <div className="absolute right-0 bottom-full mb-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden z-50">
+                              <button
+                                onClick={() => sendLockScreen(conn.id)}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                              >
+                                <Lock className="w-4 h-4 text-amber-500" />
+                                Khóa màn hình
+                              </button>
+                              <button
+                                onClick={() => setShowConfirmDialog({ type: 'logout', studentId: conn.id, studentName: pc.computerName })}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                              >
+                                <LogOut className="w-4 h-4 text-orange-500" />
+                                Đăng xuất
+                              </button>
+                              <button
+                                onClick={() => setShowConfirmDialog({ type: 'restart', studentId: conn.id, studentName: pc.computerName })}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                              >
+                                <RotateCcw className="w-4 h-4 text-blue-500" />
+                                Khởi động lại
+                              </button>
+                              <button
+                                onClick={() => setShowConfirmDialog({ type: 'shutdown', studentId: conn.id, studentName: pc.computerName })}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm font-medium text-rose-600 hover:bg-rose-50 transition-colors"
+                              >
+                                <Power className="w-4 h-4" />
+                                Tắt máy
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        
+                        <button onClick={() => disconnectStudent(conn.id)}
+                          className="p-2 bg-rose-600 text-white rounded-xl hover:bg-rose-500 transition-colors" title="Ngắt kết nối">
+                          <Unlink className="w-3 h-3" />
+                        </button>
+                      </>
                     )}
                     {savedDevice?.id && !isConnected && (
                       <button onClick={() => removeDevice(savedDevice.id!)}
@@ -826,6 +954,78 @@ const LabControl: React.FC<LabControlProps> = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* System Command Confirm Dialog */}
+      {showConfirmDialog && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setShowConfirmDialog(null)}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className={`flex items-center gap-4 px-6 py-4 ${
+              showConfirmDialog.type === 'shutdown' ? 'bg-rose-50' : 
+              showConfirmDialog.type === 'restart' ? 'bg-blue-50' : 'bg-orange-50'
+            }`}>
+              {showConfirmDialog.type === 'shutdown' && <Power className="w-8 h-8 text-rose-500" />}
+              {showConfirmDialog.type === 'restart' && <RotateCcw className="w-8 h-8 text-blue-500" />}
+              {showConfirmDialog.type === 'logout' && <LogOut className="w-8 h-8 text-orange-500" />}
+              <div>
+                <h3 className="text-lg font-black text-slate-800">
+                  {showConfirmDialog.type === 'shutdown' && 'Xác nhận tắt máy'}
+                  {showConfirmDialog.type === 'restart' && 'Xác nhận khởi động lại'}
+                  {showConfirmDialog.type === 'logout' && 'Xác nhận đăng xuất'}
+                </h3>
+                <p className="text-sm text-slate-500">{showConfirmDialog.studentName}</p>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <p className="text-slate-600">
+                {showConfirmDialog.type === 'shutdown' && 'Bạn có chắc chắn muốn tắt máy này? Tất cả công việc chưa lưu sẽ bị mất.'}
+                {showConfirmDialog.type === 'restart' && 'Bạn có chắc chắn muốn khởi động lại máy này? Tất cả công việc chưa lưu sẽ bị mất.'}
+                {showConfirmDialog.type === 'logout' && 'Bạn có chắc chắn muốn đăng xuất người dùng trên máy này?'}
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-3 px-6 py-4 bg-slate-50 border-t border-slate-200">
+              <button
+                onClick={() => setShowConfirmDialog(null)}
+                className="flex-1 py-3 bg-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-300 transition-colors"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={() => {
+                  if (showConfirmDialog.type === 'shutdown') {
+                    sendShutdown(showConfirmDialog.studentId);
+                  } else if (showConfirmDialog.type === 'restart') {
+                    sendRestart(showConfirmDialog.studentId);
+                  } else if (showConfirmDialog.type === 'logout') {
+                    sendLogout(showConfirmDialog.studentId);
+                  }
+                }}
+                className={`flex-1 flex items-center justify-center gap-2 py-3 text-white rounded-xl font-bold transition-colors ${
+                  showConfirmDialog.type === 'shutdown' ? 'bg-rose-600 hover:bg-rose-700' :
+                  showConfirmDialog.type === 'restart' ? 'bg-blue-600 hover:bg-blue-700' :
+                  'bg-orange-600 hover:bg-orange-700'
+                }`}
+              >
+                {showConfirmDialog.type === 'shutdown' && <><Power className="w-4 h-4" /> Tắt máy</>}
+                {showConfirmDialog.type === 'restart' && <><RotateCcw className="w-4 h-4" /> Khởi động lại</>}
+                {showConfirmDialog.type === 'logout' && <><LogOut className="w-4 h-4" /> Đăng xuất</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Click outside to close system menu */}
+      {systemMenuStudent && (
+        <div 
+          className="fixed inset-0 z-40" 
+          onClick={() => setSystemMenuStudent(null)}
+        />
       )}
     </div>
   );

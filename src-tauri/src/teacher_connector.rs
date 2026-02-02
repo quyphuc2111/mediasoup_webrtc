@@ -154,6 +154,22 @@ pub enum TeacherMessage {
     ListDirectory {
         path: String,
     },
+
+    #[serde(rename = "shutdown")]
+    Shutdown {
+        delay_seconds: Option<u32>,
+    },
+
+    #[serde(rename = "restart")]
+    Restart {
+        delay_seconds: Option<u32>,
+    },
+
+    #[serde(rename = "lock_screen")]
+    LockScreen,
+
+    #[serde(rename = "logout")]
+    Logout,
 }
 
 /// Command to send to a connection handler
@@ -173,6 +189,14 @@ pub enum ConnectionCommand {
     ListDirectory {
         path: String,
     },
+    Shutdown {
+        delay_seconds: Option<u32>,
+    },
+    Restart {
+        delay_seconds: Option<u32>,
+    },
+    LockScreen,
+    Logout,
 }
 
 /// Screen frame data
@@ -686,6 +710,30 @@ async fn handle_connection(
                         let json = serde_json::to_string(&msg).unwrap();
                         let _ = write.send(Message::Text(json)).await;
                     }
+                    Some(ConnectionCommand::Shutdown { delay_seconds }) => {
+                        log::info!("[TeacherConnector] Sending shutdown command");
+                        let msg = TeacherMessage::Shutdown { delay_seconds };
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
+                    Some(ConnectionCommand::Restart { delay_seconds }) => {
+                        log::info!("[TeacherConnector] Sending restart command");
+                        let msg = TeacherMessage::Restart { delay_seconds };
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
+                    Some(ConnectionCommand::LockScreen) => {
+                        log::info!("[TeacherConnector] Sending lock screen command");
+                        let msg = TeacherMessage::LockScreen;
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
+                    Some(ConnectionCommand::Logout) => {
+                        log::info!("[TeacherConnector] Sending logout command");
+                        let msg = TeacherMessage::Logout;
+                        let json = serde_json::to_string(&msg).unwrap();
+                        let _ = write.send(Message::Text(json)).await;
+                    }
                     Some(ConnectionCommand::Disconnect) | None => {
                         log::info!("[TeacherConnector] Disconnect command received");
                         let _ = write.close().await;
@@ -964,6 +1012,74 @@ pub async fn list_student_directory(
     }
 }
 
+/// Send shutdown command to student
+pub fn send_shutdown(state: &ConnectorState, id: &str, delay_seconds: Option<u32>) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendTeacherMessage(
+                TeacherMessage::Shutdown { delay_seconds },
+            ))
+            .map_err(|e| format!("Failed to send shutdown command: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Send restart command to student
+pub fn send_restart(state: &ConnectorState, id: &str, delay_seconds: Option<u32>) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendTeacherMessage(
+                TeacherMessage::Restart { delay_seconds },
+            ))
+            .map_err(|e| format!("Failed to send restart command: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Send lock screen command to student
+pub fn send_lock_screen(state: &ConnectorState, id: &str) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendTeacherMessage(
+                TeacherMessage::LockScreen,
+            ))
+            .map_err(|e| format!("Failed to send lock screen command: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
+/// Send logout command to student
+pub fn send_logout(state: &ConnectorState, id: &str) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        sender
+            .try_send(ConnectionCommand::SendTeacherMessage(
+                TeacherMessage::Logout,
+            ))
+            .map_err(|e| format!("Failed to send logout command: {}", e))?;
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -993,12 +1109,12 @@ mod tests {
 
     #[test]
     fn test_message_serialization() {
-        let msg = TeacherMessage::AuthResponse {
-            signature: "abc123".to_string(),
+        let msg = TeacherMessage::Shutdown {
+            delay_seconds: Some(5),
         };
 
         let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains("auth_response"));
+        assert!(json.contains("shutdown"));
     }
 }
 

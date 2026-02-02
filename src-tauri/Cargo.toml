@@ -68,4 +68,6 @@ rayon = "1.8"
 enigo = "0.2"
 # Timestamp for file transfer job IDs
 chrono = "0.4"
+# HTTP client for downloading documents
+reqwest = { version = "0.12", features = ["blocking"] }
 

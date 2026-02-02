@@ -62,7 +62,12 @@ const App: React.FC = () => {
   // Student Agent state
   const [agentStatus, setAgentStatus] = useState<string>('Stopped');
   const [agentPort, setAgentPort] = useState<number>(3017);
+  const [teacherIp, setTeacherIp] = useState<string>('');
   const agentStarted = useRef(false);
+
+  // Document Server state (for Teacher)
+  const [docServerUrl, setDocServerUrl] = useState<string>('');
+  const docServerStarted = useRef(false);
 
   // Initialize database on app start
   useEffect(() => {
@@ -123,6 +128,43 @@ const App: React.FC = () => {
     };
   }, [currentUser]);
 
+  // Auto-start Document Server for Teacher/Admin role
+  useEffect(() => {
+    if (!currentUser || (currentUser.role !== UserRole.TEACHER && currentUser.role !== UserRole.ADMIN) || docServerStarted.current) {
+      return;
+    }
+
+    const startDocServer = async () => {
+      try {
+        console.log('[DocumentServer] Auto-starting document server for teacher...');
+        
+        const url = await invoke<string>('start_document_server', { port: 8765 });
+        setDocServerUrl(url);
+        docServerStarted.current = true;
+        console.log('[DocumentServer] Server started at:', url);
+      } catch (error) {
+        console.error('[DocumentServer] Failed to start server:', error);
+        // Retry after 3 seconds if failed
+        setTimeout(() => {
+          docServerStarted.current = false;
+          startDocServer();
+        }, 3000);
+      }
+    };
+
+    // Small delay to ensure app is fully loaded
+    const timeoutId = setTimeout(startDocServer, 500);
+
+    // Cleanup on unmount
+    return () => {
+      clearTimeout(timeoutId);
+      if (docServerStarted.current) {
+        invoke('stop_document_server').catch(console.error);
+        docServerStarted.current = false;
+      }
+    };
+  }, [currentUser]);
+
   // Poll agent status for Student role
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.STUDENT) {
@@ -142,17 +184,24 @@ const App: React.FC = () => {
           else if (status === 'WaitingForTeacher') setAgentStatus('Waiting');
           else if (status === 'Authenticating') setAgentStatus('Authenticating');
           else setAgentStatus(status);
+          setTeacherIp('');
         } else if (typeof status === 'object' && status !== null) {
-          // Object status like { Connected: { teacher_name: "..." } }
-          if ('Stopped' in status) setAgentStatus('Stopped');
+          // Object status like { Connected: { teacher_name: "...", teacher_ip: "..." } }
+          if ('Stopped' in status) {
+            setAgentStatus('Stopped');
+            setTeacherIp('');
+          }
           else if ('Starting' in status) setAgentStatus('Starting');
           else if ('WaitingForTeacher' in status) setAgentStatus('Waiting');
           else if ('Authenticating' in status) setAgentStatus('Authenticating');
           else if ('Connected' in status && (status as any).Connected) {
-            setAgentStatus(`Connected: ${(status as any).Connected.teacher_name}`);
+            const connected = (status as any).Connected;
+            setAgentStatus(`Connected: ${connected.teacher_name}`);
+            setTeacherIp(connected.teacher_ip || '');
           }
           else if ('Error' in status && (status as any).Error) {
             setAgentStatus(`Error: ${(status as any).Error.message}`);
+            setTeacherIp('');
           }
         }
 
@@ -223,6 +272,17 @@ const App: React.FC = () => {
       }
     }
     
+    // Stop document server if running
+    if ((currentUser?.role === UserRole.TEACHER || currentUser?.role === UserRole.ADMIN) && docServerStarted.current) {
+      try {
+        await invoke('stop_document_server');
+        docServerStarted.current = false;
+        setDocServerUrl('');
+      } catch (error) {
+        console.error('Failed to stop document server:', error);
+      }
+    }
+    
     setCurrentUser(null);
     setIsLoginView(true);
     setSubPage('none');
@@ -253,7 +313,7 @@ const App: React.FC = () => {
           <div className="p-12 bg-indigo-600 text-white text-center relative overflow-hidden">
             <div className="absolute top-0 right-0 p-8 opacity-10"><Monitor className="w-32 h-32" /></div>
             <Monitor className="w-16 h-16 mx-auto mb-6 bg-white/20 p-4 rounded-2xl" />
-            <h1 className="text-3xl font-black uppercase tracking-tight">Smart Lab</h1>
+            <h1 className="text-3xl font-black uppercase tracking-tight">Smart Lab 123</h1>
             <p className="text-indigo-100 mt-2 text-sm font-medium">Hệ thống quản lý phòng máy số hóa</p>
           </div>
           <form onSubmit={handleLogin} className="p-12 space-y-6 bg-slate-50">
@@ -359,7 +419,7 @@ const App: React.FC = () => {
       <aside className={`${isSidebarOpen ? 'w-80' : 'w-24'} transition-all duration-500 bg-slate-950 flex flex-col z-50`}>
         <div className="p-10 flex items-center gap-4">
           <div className="p-3 bg-indigo-500 rounded-2xl shadow-lg shadow-indigo-500/40 animate-pulse"><Monitor className="text-white w-6 h-6" /></div>
-          {isSidebarOpen && <span className="font-black text-white text-2xl tracking-tighter italic">SMART LAB</span>}
+          {isSidebarOpen && <span className="font-black text-white text-2xl tracking-tighter italic">SMART LAB <span className='text-green-600'>ProMax</span></span>}
         </div>
         <nav className="flex-1 px-5 space-y-2 overflow-y-auto scrollbar-hide">
           {filteredMenuItems.map(item => (
@@ -413,6 +473,14 @@ const App: React.FC = () => {
                 )}
               </div>
             )}
+
+            {/* Document Server Status for Teachers */}
+            {(currentUser?.role === UserRole.TEACHER || currentUser?.role === UserRole.ADMIN) && docServerUrl && (
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-100">
+                <FileText className="w-4 h-4" />
+                <span>Tài liệu: {docServerUrl.replace('http://', '')}</span>
+              </div>
+            )}
             
             <button className="p-3 bg-slate-50 text-slate-400 rounded-2xl relative hover:bg-slate-100 transition-colors group">
               <Bell className="w-6 h-6 group-hover:rotate-12 transition-transform" />
@@ -440,7 +508,7 @@ const App: React.FC = () => {
             {activeTab === 'classroom' && (
               <OnlineClassroom user={currentUser!} />
             )}
-            {activeTab === 'documents' && <DocumentManager user={currentUser!} />}
+            {activeTab === 'documents' && <DocumentManager user={currentUser!} teacherIp={teacherIp} />}
             {activeTab === 'messaging' && <Messaging user={currentUser!} />}
           </div>
         </div>

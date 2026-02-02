@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 mod audio_capture;
 mod crypto;
 mod database;
+mod document_distribution;
 mod file_transfer;
 mod h264_decoder;
 mod h264_encoder;
@@ -18,6 +19,7 @@ mod teacher_connector;
 mod udp_audio;
 
 use crypto::{KeyPairInfo, VerifyResult};
+use document_distribution::{Document, DocumentServerState};
 use file_transfer::FileTransferState;
 use student_agent::{AgentConfig, AgentState, AgentStatus};
 use teacher_connector::{ConnectorState, StudentConnection};
@@ -1112,6 +1114,44 @@ fn send_remote_keyframe_request(
     teacher_connector::request_keyframe(&state, &connection_id)
 }
 
+/// Send shutdown command to a student
+#[tauri::command]
+fn send_shutdown_command(
+    student_id: String,
+    delay_seconds: Option<u32>,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_shutdown(&state, &student_id, delay_seconds)
+}
+
+/// Send restart command to a student
+#[tauri::command]
+fn send_restart_command(
+    student_id: String,
+    delay_seconds: Option<u32>,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_restart(&state, &student_id, delay_seconds)
+}
+
+/// Send lock screen command to a student
+#[tauri::command]
+fn send_lock_screen_command(
+    student_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_lock_screen(&state, &student_id)
+}
+
+/// Send logout command to a student
+#[tauri::command]
+fn send_logout_command(
+    student_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_logout(&state, &student_id)
+}
+
 /// Send file to a student (chunked TCP transfer)
 #[tauri::command]
 async fn send_file_to_student(
@@ -1210,6 +1250,212 @@ async fn get_student_directory(
     teacher_connector::list_student_directory(&state, &student_id, path).await
 }
 
+// ============================================================
+// Document Distribution Commands
+// ============================================================
+
+/// Global document server runtime
+static DOC_SERVER_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn get_doc_server_runtime() -> &'static tokio::runtime::Runtime {
+    DOC_SERVER_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("Failed to create document server runtime")
+    })
+}
+
+/// Start document distribution server
+#[tauri::command]
+fn start_document_server(
+    port: u16,
+    state: State<Arc<DocumentServerState>>,
+) -> Result<String, String> {
+    // Check if already running
+    {
+        let is_running = state.is_running.lock().map_err(|e| e.to_string())?;
+        if *is_running {
+            let server_port = state.server_port.lock().map_err(|e| e.to_string())?;
+            return Ok(format!("Server already running on port {}", *server_port));
+        }
+    }
+    
+    let state_clone = Arc::clone(&state);
+    let local_ip = get_local_ip();
+    
+    get_doc_server_runtime().spawn(async move {
+        if let Err(e) = document_distribution::start_document_server(state_clone, port).await {
+            log::error!("[DocumentServer] Error: {}", e);
+        }
+    });
+    
+    // Wait a bit for server to start
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    
+    Ok(format!("http://{}:{}", local_ip, port))
+}
+
+/// Stop document distribution server
+#[tauri::command]
+fn stop_document_server(state: State<Arc<DocumentServerState>>) -> Result<(), String> {
+    let mut is_running = state.is_running.lock().map_err(|e| e.to_string())?;
+    *is_running = false;
+    Ok(())
+}
+
+/// Get document server status
+#[tauri::command]
+fn get_document_server_status(state: State<Arc<DocumentServerState>>) -> Result<(bool, u16, String), String> {
+    let is_running = *state.is_running.lock().map_err(|e| e.to_string())?;
+    let port = *state.server_port.lock().map_err(|e| e.to_string())?;
+    let url = if is_running {
+        format!("http://{}:{}", get_local_ip(), port)
+    } else {
+        String::new()
+    };
+    Ok((is_running, port, url))
+}
+
+/// Upload a document
+#[tauri::command]
+async fn upload_document(
+    name: String,
+    data: Vec<u8>,
+    description: Option<String>,
+    category: Option<String>,
+    state: State<'_, Arc<DocumentServerState>>,
+) -> Result<Document, String> {
+    document_distribution::save_document(
+        Arc::clone(&state),
+        name,
+        data,
+        description,
+        category,
+    ).await
+}
+
+/// Upload document from file path
+#[tauri::command]
+async fn upload_document_from_path(
+    file_path: String,
+    description: Option<String>,
+    category: Option<String>,
+    state: State<'_, Arc<DocumentServerState>>,
+) -> Result<Document, String> {
+    let path = std::path::PathBuf::from(&file_path);
+    
+    // Get filename
+    let name = path.file_name()
+        .ok_or("Invalid file path")?
+        .to_string_lossy()
+        .to_string();
+    
+    // Read file
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    document_distribution::save_document(
+        Arc::clone(&state),
+        name,
+        data,
+        description,
+        category,
+    ).await
+}
+
+/// Delete a document
+#[tauri::command]
+async fn delete_document(
+    id: String,
+    state: State<'_, Arc<DocumentServerState>>,
+) -> Result<(), String> {
+    document_distribution::delete_document(Arc::clone(&state), &id).await
+}
+
+/// List all documents
+#[tauri::command]
+fn list_documents(state: State<Arc<DocumentServerState>>) -> Vec<Document> {
+    state.list_documents()
+}
+
+/// Get a single document
+#[tauri::command]
+fn get_document(id: String, state: State<Arc<DocumentServerState>>) -> Option<Document> {
+    state.get_document(&id)
+}
+
+/// Download document from URL to Downloads folder or custom folder
+#[tauri::command]
+async fn download_document_to_downloads(
+    url: String,
+    filename: String,
+    custom_folder: Option<String>,
+) -> Result<String, String> {
+    // Get target directory
+    let target_dir = if let Some(folder) = custom_folder {
+        std::path::PathBuf::from(folder)
+    } else {
+        dirs::download_dir()
+            .ok_or_else(|| "Failed to get Downloads directory".to_string())?
+    };
+    
+    // Create directory if not exists
+    if !target_dir.exists() {
+        tokio::fs::create_dir_all(&target_dir)
+            .await
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+    
+    // Create file path
+    let mut file_path = target_dir.join(&filename);
+    
+    // Handle duplicate filenames
+    let mut counter = 1;
+    while file_path.exists() {
+        let stem = std::path::Path::new(&filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file")
+            .to_string();
+        let ext = std::path::Path::new(&filename)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        
+        let new_name = if ext.is_empty() {
+            format!("{} ({})", stem, counter)
+        } else {
+            format!("{} ({}).{}", stem, counter, ext)
+        };
+        file_path = target_dir.join(new_name);
+        counter += 1;
+    }
+    
+    // Download file
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Failed to download: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+    
+    let bytes = response.bytes()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    
+    // Write to file
+    tokio::fs::write(&file_path, bytes)
+        .await
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    
+    Ok(file_path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1228,6 +1474,7 @@ pub fn run() {
         .manage(Arc::new(AgentState::default()))
         .manage(Arc::new(ConnectorState::default()))
         .manage(Arc::new(FileTransferState::default()))
+        .manage(Arc::new(DocumentServerState::default()))
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
@@ -1282,6 +1529,11 @@ pub fn run() {
             send_remote_mouse_event,
             send_remote_keyboard_event,
             send_remote_keyframe_request,
+            // System Control commands
+            send_shutdown_command,
+            send_restart_command,
+            send_lock_screen_command,
+            send_logout_command,
             send_file_to_student,
             cancel_file_transfer,
             get_file_transfer_status,
@@ -1293,7 +1545,17 @@ pub fn run() {
             read_file_as_base64,
             write_file_from_base64,
             get_file_info,
-            get_student_directory
+            get_student_directory,
+            download_document_to_downloads,
+            // Document Distribution commands
+            start_document_server,
+            stop_document_server,
+            get_document_server_status,
+            upload_document,
+            upload_document_from_path,
+            delete_document,
+            list_documents,
+            get_document
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
