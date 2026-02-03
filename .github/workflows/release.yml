@@ -24,6 +24,8 @@ jobs:
     env:
       # Use short path for ALL cargo builds to avoid Windows path length issues
       CARGO_TARGET_DIR: C:\t
+      # Use Visual Studio backend instead of Ninja to avoid "build.ninja still dirty" bug
+      MESON_ARGS: --backend=vs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,10 +63,6 @@ jobs:
 
       - name: Build mediasoup-rust-server
         shell: pwsh
-        env:
-          # Override mediasoup-sys Meson/Ninja versions to avoid "build.ninja still dirty" bug
-          MESON_VERSION: "1.6.1"
-          NINJA_VERSION: "1.11.1.1"
         run: |
           cargo build --release
         working-directory: mediasoup-rust-server
