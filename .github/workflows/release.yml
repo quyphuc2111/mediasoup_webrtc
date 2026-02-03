@@ -20,12 +20,14 @@ jobs:
   # ============================================================
   build-windows-teacher:
     name: Build Windows Teacher
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
-      # Use short path for ALL cargo builds to avoid Windows path length issues
-      CARGO_TARGET_DIR: C:\t
-      # Use Visual Studio backend instead of Ninja to avoid "build.ninja still dirty" bug
-      MESON_ARGS: --backend=vs
+      # Use short paths for BOTH cargo home and target to avoid path length issues
+      # Both must be on same root to avoid relative path issues in Meson
+      CARGO_HOME: C:\cargo
+      CARGO_TARGET_DIR: C:\cargo\target
+      # Keep build artifacts (mediasoup requirement)
+      KEEP_BUILD_ARTIFACTS: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,35 +48,34 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
+      - name: Configure Cargo cache
+        uses: actions/cache@v4
         with:
-          workspaces: ./src-tauri -> C:\t
-          cache-targets: false
+          path: |
+            C:\cargo\registry
+            C:\cargo\git
+          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            windows-cargo-
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Setup Visual Studio environment
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Disable Windows Defender for build folder
+      - name: Disable Windows Defender for build folders
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath "C:\t"
+          Add-MpPreference -ExclusionPath "C:\cargo"
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Build mediasoup-rust-server
-        shell: pwsh
-        run: |
-          cargo build --release
+        run: cargo build --release --verbose
         working-directory: mediasoup-rust-server
 
       - name: Prepare mediasoup-rust-server binary
         shell: bash
         run: |
           mkdir -p src-tauri/binaries/server
-          cp C:/t/release/mediasoup-rust-server.exe src-tauri/binaries/server/
+          cp C:/cargo/target/release/mediasoup-rust-server.exe src-tauri/binaries/server/
 
       - name: Build frontend
         run: npm run build
