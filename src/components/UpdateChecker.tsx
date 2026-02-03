@@ -31,7 +31,11 @@ export function UpdateChecker() {
       }
     } catch (err) {
       console.error('[Updater] Check failed:', err);
-      setError(err instanceof Error ? err.message : 'Failed to check for updates');
+      // Don't show error for "no release" - this is expected before first release
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (!errorMsg.includes('release JSON') && !errorMsg.includes('404')) {
+        setError(errorMsg);
+      }
     }
   };
 
