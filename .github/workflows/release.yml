@@ -22,7 +22,7 @@ jobs:
     name: Build Windows Teacher
     runs-on: windows-latest
     env:
-      # Use short path to avoid Windows path length issues with mediasoup-sys
+      # Use short path for ALL cargo builds to avoid Windows path length issues
       CARGO_TARGET_DIR: C:\t
     steps:
       - name: Checkout
@@ -39,14 +39,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Python dependencies for mediasoup
-        shell: pwsh
-        run: |
-          python -m pip install invoke meson ninja
-          # Verify executables are in PATH
-          meson --version
-          ninja --version
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -55,8 +47,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: |
-            ./src-tauri -> target
+          workspaces: ./src-tauri -> C:\t
           cache-targets: false
 
       - name: Install frontend dependencies
@@ -65,16 +56,16 @@ jobs:
       - name: Disable Windows Defender for build folder
         shell: pwsh
         run: |
-          # Disable real-time scanning for build paths to avoid ninja race condition
           Add-MpPreference -ExclusionPath "C:\t"
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Build mediasoup-rust-server
         shell: pwsh
         env:
-          PYTHONPATH: ${{ env.pythonLocation }}\Lib\site-packages
+          # Override mediasoup-sys Meson/Ninja versions to avoid "build.ninja still dirty" bug
+          MESON_VERSION: "1.6.1"
+          NINJA_VERSION: "1.11.1.1"
         run: |
-          $env:PATH = "${{ env.pythonLocation }}\Scripts;$env:PATH"
           cargo build --release
         working-directory: mediasoup-rust-server
 
@@ -91,7 +82,6 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CARGO_TARGET_DIR: target
         with:
           tagName: ${{ github.ref_name || github.event.inputs.version }}
           releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
@@ -158,114 +148,114 @@ jobs:
           args: --config src-tauri/tauri.student.conf.json --target x86_64-pc-windows-msvc --bundles nsis
 
   # ============================================================
-  # macOS Builds
+  # macOS Builds (temporarily disabled)
   # ============================================================
-  build-macos-teacher:
-    name: Build macOS Teacher
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # build-macos-teacher:
+  #   name: Build macOS Teacher
+  #   runs-on: macos-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #         cache: 'npm'
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+  #     - name: Setup Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.12'
 
-      - name: Install Python dependencies for mediasoup
-        run: |
-          python -m pip install --upgrade pip
-          pip install invoke meson ninja
+  #     - name: Install Python dependencies for mediasoup
+  #       run: |
+  #         python -m pip install --upgrade pip
+  #         pip install invoke meson ninja
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
+  #     - name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            ./src-tauri -> target
-            ./mediasoup-rust-server -> target
+  #     - name: Rust cache
+  #       uses: swatinem/rust-cache@v2
+  #       with:
+  #         workspaces: |
+  #           ./src-tauri -> target
+  #           ./mediasoup-rust-server -> target
 
-      - name: Install frontend dependencies
-        run: npm ci
+  #     - name: Install frontend dependencies
+  #       run: npm ci
 
-      - name: Build mediasoup-rust-server (Intel)
-        run: cargo build --release --target x86_64-apple-darwin
-        working-directory: mediasoup-rust-server
+  #     - name: Build mediasoup-rust-server (Intel)
+  #       run: cargo build --release --target x86_64-apple-darwin
+  #       working-directory: mediasoup-rust-server
 
-      - name: Build mediasoup-rust-server (ARM)
-        run: cargo build --release --target aarch64-apple-darwin
-        working-directory: mediasoup-rust-server
+  #     - name: Build mediasoup-rust-server (ARM)
+  #       run: cargo build --release --target aarch64-apple-darwin
+  #       working-directory: mediasoup-rust-server
 
-      - name: Create universal binary for mediasoup-rust-server
-        run: |
-          mkdir -p src-tauri/binaries/server
-          lipo -create \
-            mediasoup-rust-server/target/x86_64-apple-darwin/release/mediasoup-rust-server \
-            mediasoup-rust-server/target/aarch64-apple-darwin/release/mediasoup-rust-server \
-            -output src-tauri/binaries/server/mediasoup-rust-server
-          chmod +x src-tauri/binaries/server/mediasoup-rust-server
+  #     - name: Create universal binary for mediasoup-rust-server
+  #       run: |
+  #         mkdir -p src-tauri/binaries/server
+  #         lipo -create \
+  #           mediasoup-rust-server/target/x86_64-apple-darwin/release/mediasoup-rust-server \
+  #           mediasoup-rust-server/target/aarch64-apple-darwin/release/mediasoup-rust-server \
+  #           -output src-tauri/binaries/server/mediasoup-rust-server
+  #         chmod +x src-tauri/binaries/server/mediasoup-rust-server
 
-      - name: Build frontend
-        run: npm run build
+  #     - name: Build frontend
+  #       run: npm run build
 
-      - name: Build Tauri Teacher App (Universal)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name || github.event.inputs.version }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
-          releaseDraft: false
-          prerelease: false
-          args: --target universal-apple-darwin --bundles dmg
+  #     - name: Build Tauri Teacher App (Universal)
+  #       uses: tauri-apps/tauri-action@v0
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         tagName: ${{ github.ref_name || github.event.inputs.version }}
+  #         releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
+  #         releaseDraft: false
+  #         prerelease: false
+  #         args: --target universal-apple-darwin --bundles dmg
 
-  build-macos-student:
-    name: Build macOS Student
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # build-macos-student:
+  #   name: Build macOS Student
+  #   runs-on: macos-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
+  #     - name: Setup Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 20
+  #         cache: 'npm'
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
+  #     - name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: x86_64-apple-darwin,aarch64-apple-darwin
 
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: ./src-tauri -> target
+  #     - name: Rust cache
+  #       uses: swatinem/rust-cache@v2
+  #       with:
+  #         workspaces: ./src-tauri -> target
 
-      - name: Install frontend dependencies
-        run: npm ci
+  #     - name: Install frontend dependencies
+  #       run: npm ci
 
-      - name: Build frontend
-        run: npm run build
+  #     - name: Build frontend
+  #       run: npm run build
 
-      - name: Build Tauri Student App (Universal)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name || github.event.inputs.version }}
-          releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
-          releaseDraft: false
-          prerelease: false
-          args: --config src-tauri/tauri.student.conf.json --target universal-apple-darwin --bundles dmg
+  #     - name: Build Tauri Student App (Universal)
+  #       uses: tauri-apps/tauri-action@v0
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       with:
+  #         tagName: ${{ github.ref_name || github.event.inputs.version }}
+  #         releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
+  #         releaseDraft: false
+  #         prerelease: false
+  #         args: --config src-tauri/tauri.student.conf.json --target universal-apple-darwin --bundles dmg
 
