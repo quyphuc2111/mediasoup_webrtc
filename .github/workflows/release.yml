@@ -55,6 +55,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Setup Visual Studio environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Disable Windows Defender for build folder
         shell: pwsh
         run: |
