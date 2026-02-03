@@ -17,6 +17,7 @@ import SystemConfig from './views/SystemConfig';
 import { ScreenSharingPage } from './pages/ScreenSharingPage';
 import { ViewClientPage } from './pages/ViewClientPage';
 import { FileTransferPage } from './pages/FileTransferPage';
+import { UpdateChecker } from './components/UpdateChecker';
 import { UserAccount as User, UserRole } from './types';
 import './App.css';
 
@@ -513,6 +514,9 @@ const App: React.FC = () => {
           </div>
         </div>
       </main>
+
+      {/* Auto-update checker */}
+      <UpdateChecker />
     </div>
   );
 };

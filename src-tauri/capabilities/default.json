@@ -16,6 +16,12 @@
     "core:window:allow-minimize",
     "core:window:allow-maximize",
     "core:window:allow-set-size",
-    "core:window:allow-set-title"
+    "core:window:allow-set-title",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "process:default",
+    "process:allow-restart"
   ]
 }

@@ -1,7 +1,7 @@
 {
   "name": "screensharing-webrtc-mediasoup",
   "private": true,
-  "version": "0.1.0",
+  "version": "10.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,7 @@
     "tauri:build:student:intel": "rustup target add x86_64-apple-darwin && tauri build --config src-tauri/tauri.student.conf.json --target x86_64-apple-darwin",
     "tauri:build:student:universal": "rustup target add x86_64-apple-darwin aarch64-apple-darwin && tauri build --config src-tauri/tauri.student.conf.json --target universal-apple-darwin",
     "prepare:binaries": "node scripts/prepare-binaries.js",
+    "generate:keys": "bash scripts/generate-signing-keys.sh",
     "build:teacher": "npm run prepare:binaries && npm run build && npm run tauri:build",
     "build:teacher:intel": "npm run prepare:binaries && npm run build && npm run tauri:build:intel",
     "build:teacher:universal": "npm run prepare:binaries && npm run build && npm run tauri:build:universal",
@@ -30,6 +31,8 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2",
+    "@tauri-apps/plugin-updater": "^2",
     "lucide-react": "^0.563.0",
     "mediasoup-client": "^3.7.17",
     "react": "^19.1.0",
