@@ -31,6 +31,16 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies for mediasoup
+        run: |
+          python -m pip install --upgrade pip
+          pip install invoke meson ninja
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -143,6 +153,16 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies for mediasoup
+        run: |
+          python -m pip install --upgrade pip
+          pip install invoke meson ninja
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
