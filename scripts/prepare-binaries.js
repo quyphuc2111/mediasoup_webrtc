@@ -1,31 +1,27 @@
-// Script to prepare binaries for Tauri bundle
-// - Build mediasoup-server
-// - Copy mediasoup-server binary based on OS
-// - Bundle Node.js (optional, can use system Node.js)
+// Script to prepare Rust mediasoup server binary for Tauri bundle
+// Copies the compiled Rust binary to the correct location
 
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, '..');
 
-// Detect OS
+// Detect OS and architecture
 const platform = process.platform;
+const arch = process.arch;
 const isWindows = platform === 'win32';
 const isMacOS = platform === 'darwin';
 const isLinux = platform === 'linux';
 
-console.log(`🖥️  Detected OS: ${platform}`);
+console.log(`🖥️  Detected OS: ${platform}, Arch: ${arch}`);
 
 // Paths
-const serverDir = path.join(rootDir, 'mediasoup-server');
+const rustServerDir = path.join(rootDir, 'mediasoup-rust-server');
 const binariesDir = path.join(rootDir, 'src-tauri', 'binaries');
 const serverBinDir = path.join(binariesDir, 'server');
-const serverDistDir = path.join(serverBinDir, 'dist');
-const nodeBinDir = path.join(binariesDir, 'node');
 
 // Ensure directories exist
 function ensureDir(dir) {
@@ -35,156 +31,157 @@ function ensureDir(dir) {
   }
 }
 
-// Get mediasoup-server binary name based on OS
-function getServerBinaryName() {
+// Get Tauri target triple
+function getTargetTriple() {
   if (isWindows) {
-    return 'mediasoup-server-win.exe';
+    return 'x86_64-pc-windows-msvc';
   } else if (isMacOS) {
-    return 'mediasoup-server-macos';
+    // For universal builds, we need both architectures
+    if (arch === 'arm64') {
+      return 'aarch64-apple-darwin';
+    }
+    return 'x86_64-apple-darwin';
   } else if (isLinux) {
-    return 'mediasoup-server-linux';
+    return 'x86_64-unknown-linux-gnu';
   }
   throw new Error(`Unsupported platform: ${platform}`);
 }
 
-// Build mediasoup-server
-function buildServer() {
-  console.log('\n📦 Building mediasoup-server...');
-  
-  try {
-    // Build TypeScript
-    console.log('   → Compiling TypeScript...');
-    execSync('npm run build', { cwd: serverDir, stdio: 'inherit' });
-    
-    console.log('✅ mediasoup-server built successfully');
-    return true;
-  } catch (error) {
-    console.error('❌ Failed to build mediasoup-server:', error.message);
-    return false;
-  }
+// Get binary extension
+function getBinaryExtension() {
+  return isWindows ? '.exe' : '';
 }
 
-// Copy mediasoup-server binary or dist
-function copyServerBinary() {
-  console.log('\n📋 Preparing mediasoup-server for bundle...');
+// Copy Rust server binary
+function copyRustServerBinary() {
+  console.log('\n📋 Preparing mediasoup-rust-server for bundle...');
   
-  const binaryName = getServerBinaryName();
-  const sourceBinaryPath = path.join(binariesDir, binaryName);
-  const distSourcePath = path.join(serverDir, 'dist', 'index.js');
-  const targetDistPath = path.join(serverDistDir, 'index.js');
+  const ext = getBinaryExtension();
+  const targetTriple = getTargetTriple();
+  
+  // Check for custom CARGO_TARGET_DIR (used in CI for Windows path length issues)
+  const customTargetDir = process.env.CARGO_TARGET_DIR;
+  
+  // Source paths to check (in order of priority)
+  const possibleSourcePaths = [];
+  
+  if (customTargetDir) {
+    // Custom target dir (CI Windows)
+    possibleSourcePaths.push(path.join(customTargetDir, 'release', `mediasoup-rust-server${ext}`));
+  }
+  
+  // Default: mediasoup-rust-server/target/release/mediasoup-rust-server(.exe)
+  possibleSourcePaths.push(path.join(rustServerDir, 'target', 'release', `mediasoup-rust-server${ext}`));
+  
+  // Find the first existing binary
+  let sourceBinaryPath = null;
+  for (const p of possibleSourcePaths) {
+    console.log(`   🔍 Checking: ${p}`);
+    if (fs.existsSync(p)) {
+      sourceBinaryPath = p;
+      console.log(`   ✅ Found binary at: ${p}`);
+      break;
+    }
+  }
+  
+  if (!sourceBinaryPath) {
+    console.error(`❌ Rust server binary not found at any of these locations:`);
+    possibleSourcePaths.forEach(p => console.error(`   - ${p}`));
+    console.error('   Please build it first with: cd mediasoup-rust-server && cargo build --release');
+    return false;
+  }
+  
+  // Target: src-tauri/binaries/server/mediasoup-rust-server-{target-triple}(.exe)
+  // Tauri expects binaries named with target triple suffix
+  const targetBinaryName = `mediasoup-rust-server-${targetTriple}${ext}`;
+  const targetBinaryPath = path.join(serverBinDir, targetBinaryName);
+  
+  // Also copy without target triple for backwards compatibility
+  const targetBinaryPathSimple = path.join(serverBinDir, `mediasoup-rust-server${ext}`);
   
   // Ensure target directory exists
-  ensureDir(serverDistDir);
+  ensureDir(serverBinDir);
   
-  // Priority 1: Copy dist/index.js (preferred for bundling with Node.js)
-  if (fs.existsSync(distSourcePath)) {
-    fs.copyFileSync(distSourcePath, targetDistPath);
-    console.log(`   ✅ Copied dist/index.js to ${targetDistPath}`);
-    
-    // Also copy the binary to server root for reference
-    if (fs.existsSync(sourceBinaryPath)) {
-      const targetBinaryPath = path.join(serverBinDir, binaryName);
-      fs.copyFileSync(sourceBinaryPath, targetBinaryPath);
-      console.log(`   ✅ Copied binary ${binaryName} to ${targetBinaryPath}`);
-      
-      // Make binary executable on Unix
-      if (!isWindows && fs.existsSync(targetBinaryPath)) {
-        try {
-          fs.chmodSync(targetBinaryPath, '755');
-          console.log(`   ✅ Made binary executable`);
-        } catch (error) {
-          console.warn(`   ⚠️  Could not make binary executable: ${error.message}`);
-        }
-      }
-    } else {
-      console.warn(`   ⚠️  Binary not found: ${sourceBinaryPath}`);
-      console.warn(`      You may need to build it using: cd mediasoup-server && npm run pkg`);
+  // Copy binary with target triple name (for Tauri sidecar)
+  fs.copyFileSync(sourceBinaryPath, targetBinaryPath);
+  console.log(`   ✅ Copied to ${targetBinaryPath}`);
+  
+  // Also copy without target triple (for direct use)
+  fs.copyFileSync(sourceBinaryPath, targetBinaryPathSimple);
+  console.log(`   ✅ Copied to ${targetBinaryPathSimple}`);
+  
+  // Make binary executable on Unix
+  if (!isWindows) {
+    try {
+      fs.chmodSync(targetBinaryPath, '755');
+      fs.chmodSync(targetBinaryPathSimple, '755');
+      console.log(`   ✅ Made binaries executable`);
+    } catch (error) {
+      console.warn(`   ⚠️  Could not make binary executable: ${error.message}`);
     }
-    
-    return true;
-  } else {
-    console.error(`   ❌ dist/index.js not found. Please build mediasoup-server first.`);
-    return false;
   }
+  
+  // Get file size
+  const stats = fs.statSync(targetBinaryPath);
+  const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+  console.log(`   📦 Binary size: ${sizeMB} MB`);
+  
+  return true;
 }
 
-// Copy mediasoup-server node_modules (needed for mediasoup native modules)
-function copyNodeModules() {
-  console.log('\n📦 Copying mediasoup-server node_modules...');
+// For macOS universal builds, copy both architectures if available
+function copyMacOSUniversalBinaries() {
+  if (!isMacOS) return true;
   
-  const sourceNodeModules = path.join(serverDir, 'node_modules');
-  const targetNodeModules = path.join(serverDistDir, 'node_modules');
+  console.log('\n📋 Checking for macOS universal build binaries...');
   
-  if (!fs.existsSync(sourceNodeModules)) {
-    console.warn('⚠️  node_modules not found, installing...');
-    try {
-      execSync('npm install', { cwd: serverDir, stdio: 'inherit' });
-    } catch (error) {
-      console.error('❌ Failed to install node_modules:', error.message);
-      return false;
-    }
-  }
+  const architectures = [
+    { arch: 'x86_64-apple-darwin', folder: 'x86_64-apple-darwin' },
+    { arch: 'aarch64-apple-darwin', folder: 'aarch64-apple-darwin' },
+  ];
   
-  // Copy only necessary node_modules (mediasoup requires native modules)
-  const requiredModules = ['mediasoup', 'ws', 'uuid'];
+  let copiedCount = 0;
   
-  ensureDir(targetNodeModules);
-  
-  for (const module of requiredModules) {
-    const sourceModule = path.join(sourceNodeModules, module);
-    const targetModule = path.join(targetNodeModules, module);
+  for (const { arch: targetArch, folder } of architectures) {
+    // Check for cross-compiled binary
+    const crossCompiledPath = path.join(rustServerDir, 'target', folder, 'release', 'mediasoup-rust-server');
+    const targetPath = path.join(serverBinDir, `mediasoup-rust-server-${targetArch}`);
     
-    if (fs.existsSync(sourceModule)) {
-      if (fs.existsSync(targetModule)) {
-        fs.rmSync(targetModule, { recursive: true, force: true });
-      }
-      fs.cpSync(sourceModule, targetModule, { recursive: true });
-      console.log(`   ✅ Copied ${module}`);
-    } else {
-      console.warn(`   ⚠️  Module not found: ${module}`);
+    if (fs.existsSync(crossCompiledPath)) {
+      fs.copyFileSync(crossCompiledPath, targetPath);
+      fs.chmodSync(targetPath, '755');
+      console.log(`   ✅ Copied ${targetArch} binary`);
+      copiedCount++;
     }
   }
   
-  console.log('✅ Node modules copied');
+  if (copiedCount > 0) {
+    console.log(`   📦 Copied ${copiedCount} architecture-specific binaries`);
+  }
+  
   return true;
 }
 
 // Main function
 function main() {
-  console.log('🚀 Preparing binaries for Tauri bundle...\n');
+  console.log('🚀 Preparing Rust mediasoup server binary for Tauri bundle...\n');
   
   // Ensure directories exist
   ensureDir(binariesDir);
   ensureDir(serverBinDir);
-  ensureDir(serverDistDir);
   
-  // Build mediasoup-server
-  const buildSuccess = buildServer();
-  
-  if (!buildSuccess) {
-    console.error('\n❌ Failed to build mediasoup-server');
-    process.exit(1);
-  }
-  
-  // Copy server binary/dist
-  const copySuccess = copyServerBinary();
+  // Copy Rust server binary
+  const copySuccess = copyRustServerBinary();
   
   if (!copySuccess) {
-    console.error('\n❌ Failed to copy server binary');
+    console.error('\n❌ Failed to copy Rust server binary');
     process.exit(1);
   }
   
-  // Copy node_modules
-  copyNodeModules();
+  // For macOS, also try to copy universal binaries
+  copyMacOSUniversalBinaries();
   
-  console.log('\n✅ All binaries prepared successfully!');
-  console.log('\n📝 Note: Node.js will use system version if not bundled.');
-  console.log('   To bundle Node.js, download it and place at:');
-  if (isWindows) {
-    console.log('   src-tauri/binaries/node/node.exe');
-  } else {
-    console.log('   src-tauri/binaries/node/bin/node (or node)');
-  }
+  console.log('\n✅ Rust server binary prepared successfully!');
 }
 
 main();

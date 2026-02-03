@@ -47,43 +47,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Configure Windows Path Optimization (Windows only)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          # Enable long paths in Git
-          git config --system core.longpaths true
-          
-          # Set shorter paths for Cargo
-          echo "CARGO_HOME=C:\c" >> $env:GITHUB_ENV
-          echo "CARGO_TARGET_DIR=C:\t" >> $env:GITHUB_ENV
-          
-          # Create directories
-          New-Item -ItemType Directory -Force -Path C:\c
-          New-Item -ItemType Directory -Force -Path C:\t
-          
-          # Copy existing Cargo registry if it exists
-          if (Test-Path "$env:USERPROFILE\.cargo\registry") {
-            Write-Host "Copying Cargo registry to shorter path..."
-            Copy-Item -Path "$env:USERPROFILE\.cargo\registry" -Destination "C:\c\registry" -Recurse -Force
-          }
-          
-          Write-Host "CARGO_HOME set to: C:\c"
-          Write-Host "CARGO_TARGET_DIR set to: C:\t"
-
       - name: Build Mediasoup Rust Server
         run: |
           cd mediasoup-rust-server
           cargo build --release
-        env:
-          CARGO_INCREMENTAL: '0'
-          CARGO_PROFILE_RELEASE_DEBUG: '0'
 
       - name: Prepare binaries
         run: npm run prepare:binaries
-        env:
-          CARGO_HOME: ${{ matrix.platform == 'windows-latest' && 'C:\c' || '' }}
-          CARGO_TARGET_DIR: ${{ matrix.platform == 'windows-latest' && 'C:\t' || '' }}
 
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
@@ -140,43 +110,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Configure Windows Path Optimization (Windows only)
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        run: |
-          # Enable long paths in Git
-          git config --system core.longpaths true
-          
-          # Set shorter paths for Cargo
-          echo "CARGO_HOME=C:\c" >> $env:GITHUB_ENV
-          echo "CARGO_TARGET_DIR=C:\t" >> $env:GITHUB_ENV
-          
-          # Create directories
-          New-Item -ItemType Directory -Force -Path C:\c
-          New-Item -ItemType Directory -Force -Path C:\t
-          
-          # Copy existing Cargo registry if it exists
-          if (Test-Path "$env:USERPROFILE\.cargo\registry") {
-            Write-Host "Copying Cargo registry to shorter path..."
-            Copy-Item -Path "$env:USERPROFILE\.cargo\registry" -Destination "C:\c\registry" -Recurse -Force
-          }
-          
-          Write-Host "CARGO_HOME set to: C:\c"
-          Write-Host "CARGO_TARGET_DIR set to: C:\t"
-
       - name: Build Mediasoup Rust Server
         run: |
           cd mediasoup-rust-server
           cargo build --release
-        env:
-          CARGO_INCREMENTAL: '0'
-          CARGO_PROFILE_RELEASE_DEBUG: '0'
 
       - name: Prepare binaries
         run: npm run prepare:binaries
-        env:
-          CARGO_HOME: ${{ matrix.platform == 'windows-latest' && 'C:\c' || '' }}
-          CARGO_TARGET_DIR: ${{ matrix.platform == 'windows-latest' && 'C:\t' || '' }}
 
       - name: Build Student app
         uses: tauri-apps/tauri-action@v0
