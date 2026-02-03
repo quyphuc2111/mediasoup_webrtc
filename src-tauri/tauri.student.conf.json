@@ -34,6 +34,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [],
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.13",
