@@ -2,19 +2,21 @@ use mediasoup::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// Incoming message from client
+/// Uses adjacently tagged enum to handle both messages with and without data
 #[derive(Debug, Deserialize)]
-#[serde(tag = "type", content = "data")]
+#[serde(tag = "type")]
 #[serde(rename_all = "camelCase")]
 pub enum ClientMessage {
-    Join(JoinData),
+    Join { data: JoinData },
     GetRouterRtpCapabilities,
-    CreateTransport(CreateTransportData),
-    ConnectTransport(ConnectTransportData),
-    Produce(ProduceData),
-    Consume(ConsumeData),
-    ResumeConsumer(ResumeConsumerData),
-    GetProducers,
-    ChatMessage(ChatMessageData),
+    CreateTransport { data: CreateTransportData },
+    ConnectTransport { data: ConnectTransportData },
+    Produce { data: ProduceData },
+    Consume { data: ConsumeData },
+    ResumeConsumer { data: ResumeConsumerData },
+    #[serde(alias = "getProducers")]
+    GetProducers { #[serde(default)] data: Option<serde_json::Value> },
+    ChatMessage { data: ChatMessageData },
 }
 
 #[derive(Debug, Deserialize)]

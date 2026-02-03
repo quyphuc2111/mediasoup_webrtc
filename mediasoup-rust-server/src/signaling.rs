@@ -143,31 +143,31 @@ async fn handle_message(
     tx: &Tx,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match message {
-        ClientMessage::Join(data) => {
+        ClientMessage::Join { data } => {
             handle_join(addr, data, manager, clients, tx).await?;
         }
         ClientMessage::GetRouterRtpCapabilities => {
             handle_get_router_rtp_capabilities(addr, manager, clients, tx)?;
         }
-        ClientMessage::CreateTransport(data) => {
+        ClientMessage::CreateTransport { data } => {
             handle_create_transport(addr, data, manager, clients, tx).await?;
         }
-        ClientMessage::ConnectTransport(data) => {
+        ClientMessage::ConnectTransport { data } => {
             handle_connect_transport(addr, data, manager, clients, tx).await?;
         }
-        ClientMessage::Produce(data) => {
+        ClientMessage::Produce { data } => {
             handle_produce(addr, data, manager, clients, tx).await?;
         }
-        ClientMessage::Consume(data) => {
+        ClientMessage::Consume { data } => {
             handle_consume(addr, data, manager, clients, tx).await?;
         }
-        ClientMessage::ResumeConsumer(data) => {
+        ClientMessage::ResumeConsumer { data } => {
             handle_resume_consumer(addr, data, manager, clients, tx).await?;
         }
-        ClientMessage::GetProducers => {
+        ClientMessage::GetProducers { .. } => {
             handle_get_producers(addr, manager, clients, tx)?;
         }
-        ClientMessage::ChatMessage(data) => {
+        ClientMessage::ChatMessage { data } => {
             handle_chat_message(addr, data, manager, clients)?;
         }
     }

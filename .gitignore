@@ -25,7 +25,10 @@ dist-student/
 *.sw?
 .cursor/
 .agent/
-# Rust
-mediasoup-rust-server/target/
 
-# labmaster
+# Rust targets
+mediasoup-rust-server/target/
+src-tauri/target/
+
+# Bundled binaries (generated during build)
+src-tauri/binaries/server/

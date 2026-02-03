@@ -101,114 +101,6 @@ fn get_resource_path(app: &AppHandle, resource: &str) -> Option<PathBuf> {
     app.path().resource_dir().ok().map(|p| p.join(resource))
 }
 
-// Helper function to start server with Node.js
-fn start_server_with_node(app: &AppHandle) -> Result<Child, String> {
-    // Try to find Node.js - first bundled, then system
-    let node_path = if cfg!(target_os = "windows") {
-        // Windows: look for bundled node.exe
-        let bundled_path = get_resource_path(app, "binaries/node/node.exe");
-        if let Some(path) = bundled_path.as_ref() {
-            if path.exists() {
-                path.clone()
-            } else {
-                // Bundled path doesn't exist, try system node
-                match Command::new("node").arg("--version").output() {
-                    Ok(_) => {
-                        println!("[Server] Using system Node.js");
-                        PathBuf::from("node")
-                    }
-                    Err(_) => {
-                        return Err(
-                            "Node.js not found. Please install Node.js from https://nodejs.org/"
-                                .to_string(),
-                        )
-                    }
-                }
-            }
-        } else {
-            // No bundled path, try system node
-            match Command::new("node").arg("--version").output() {
-                Ok(_) => {
-                    println!("[Server] Using system Node.js");
-                    PathBuf::from("node")
-                }
-                Err(_) => {
-                    return Err(
-                        "Node.js not found. Please install Node.js from https://nodejs.org/"
-                            .to_string(),
-                    )
-                }
-            }
-        }
-    } else {
-        // macOS/Linux: try bundled node first
-        let bundled_path = get_resource_path(app, "binaries/node/bin/node")
-            .or_else(|| get_resource_path(app, "binaries/node/node"));
-
-        if let Some(path) = bundled_path.as_ref() {
-            if path.exists() {
-                path.clone()
-            } else {
-                // Bundled path doesn't exist, try system node
-                match Command::new("node").arg("--version").output() {
-                    Ok(_) => {
-                        println!("[Server] Using system Node.js (bundled not found)");
-                        PathBuf::from("node")
-                    }
-                    Err(_) => return Err("Node.js not found. Please install Node.js from https://nodejs.org/ or bundle it in the app.".to_string()),
-                }
-            }
-        } else {
-            // No bundled path, try system node
-            match Command::new("node").arg("--version").output() {
-                Ok(_) => {
-                    println!("[Server] Using system Node.js");
-                    PathBuf::from("node")
-                }
-                Err(_) => return Err("Node.js not found. Please install Node.js from https://nodejs.org/ or bundle it in the app.".to_string()),
-            }
-        }
-    };
-
-    // Check server path (dist/index.js)
-    let server_path = get_resource_path(app, "binaries/server/dist/index.js")
-        .ok_or("Server not found in bundle")?;
-
-    if !server_path.exists() {
-        return Err(format!("Server not found at: {:?}", server_path));
-    }
-
-    println!(
-        "[Server] Starting server with Node.js: {:?} {:?}",
-        node_path, server_path
-    );
-
-    let mut command = Command::new(&node_path);
-    command
-        .arg(&server_path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    // On Unix systems, detach from terminal to run in background
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-
-    // On Windows, create no window
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    command
-        .spawn()
-        .map_err(|e| format!("Failed to start server: {}", e))
-}
-
 #[tauri::command]
 fn start_server(app: AppHandle, state: State<ServerState>) -> Result<ServerInfo, String> {
     let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
@@ -224,37 +116,31 @@ fn start_server(app: AppHandle, state: State<ServerState>) -> Result<ServerInfo,
     #[cfg(debug_assertions)]
     let child = {
         let mut root_dir = std::env::current_dir().map_err(|e| e.to_string())?;
-        // If we are in src-tauri, go up one level to find mediasoup-server
+        // If we are in src-tauri, go up one level to find mediasoup-rust-server
         if root_dir.ends_with("src-tauri") {
             root_dir.pop();
         }
 
-        let server_dir = root_dir.join("mediasoup-server");
-        if !server_dir.exists() {
-            return Err(format!("Server directory not found at: {:?}", server_dir));
+        let rust_server_dir = root_dir.join("mediasoup-rust-server");
+        if !rust_server_dir.exists() {
+            return Err(format!("Rust server directory not found at: {:?}", rust_server_dir));
         }
 
-        let cmd_name = if cfg!(target_os = "windows") {
-            "npm.cmd"
-        } else {
-            "npm"
-        };
-
-        let mut command = Command::new(cmd_name);
+        println!("[Server] Starting Rust mediasoup server from: {:?}", rust_server_dir);
+        
+        let mut command = Command::new("cargo");
         command
-            .args(["run", "dev"])
-            .current_dir(server_dir)
+            .args(["run", "--release"])
+            .current_dir(&rust_server_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        // On Unix systems, detach from terminal to run in background
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
         }
 
-        // On Windows, create no window
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -264,71 +150,51 @@ fn start_server(app: AppHandle, state: State<ServerState>) -> Result<ServerInfo,
 
         command
             .spawn()
-            .map_err(|e| format!("Failed to start dev server: {}", e))?
+            .map_err(|e| format!("Failed to start Rust server: {}", e))?
     };
 
     #[cfg(not(debug_assertions))]
     let child = {
-        // Priority 1: Try to use bundled mediasoup-server binary (no Node.js needed)
-        let server_binary_name = if cfg!(target_os = "windows") {
-            "binaries/server/mediasoup-server-win.exe"
-        } else if cfg!(target_os = "macos") {
-            "binaries/server/mediasoup-server-macos"
+        let rust_binary_name = if cfg!(target_os = "windows") {
+            "binaries/server/mediasoup-rust-server.exe"
         } else {
-            "binaries/server/mediasoup-server-linux"
+            "binaries/server/mediasoup-rust-server"
         };
 
-        let bundled_binary = get_resource_path(&app, server_binary_name);
+        let binary_path = get_resource_path(&app, rust_binary_name)
+            .ok_or("Mediasoup server binary path not found")?;
 
-        // Try bundled binary first
-        if let Some(binary_path) = bundled_binary.as_ref() {
-            if binary_path.exists() {
-                // Use bundled binary directly (no Node.js needed)
-                println!(
-                    "[Server] Using bundled mediasoup-server binary: {:?}",
-                    binary_path
-                );
-
-                let mut command = Command::new(binary_path);
-                command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-                // On Unix systems, detach from terminal to run in background
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::CommandExt;
-                    command.process_group(0);
-                }
-
-                // On Windows, create no window
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    const CREATE_NO_WINDOW: u32 = 0x08000000;
-                    command.creation_flags(CREATE_NO_WINDOW);
-                }
-
-                command
-                    .spawn()
-                    .map_err(|e| format!("Failed to start bundled server binary: {}", e))?
-            } else {
-                // Binary path doesn't exist, fallback to Node.js
-                println!(
-                    "[Server] Bundled binary not found at {:?}, using Node.js + dist/index.js",
-                    binary_path
-                );
-                start_server_with_node(&app)?
-            }
-        } else {
-            // No bundled binary path, fallback to Node.js
-            println!("[Server] Bundled binary path not found, using Node.js + dist/index.js");
-            start_server_with_node(&app)?
+        if !binary_path.exists() {
+            return Err(format!("Mediasoup server binary not found at: {:?}", binary_path));
         }
+
+        println!("[Server] Starting Rust mediasoup server: {:?}", binary_path);
+
+        let mut command = Command::new(&binary_path);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        command
+            .spawn()
+            .map_err(|e| format!("Failed to start server: {}", e))?
     };
 
     *process_guard = Some(child);
 
-    // Wait for server to start
-    std::thread::sleep(std::time::Duration::from_millis(2000));
+    // Wait for server to start (Rust server starts faster than Node.js)
+    std::thread::sleep(std::time::Duration::from_millis(1000));
 
     let ip = get_local_ip();
     let port = 3016u16;

@@ -4,26 +4,14 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
-default-run = "screensharing-webrtc-mediasoup"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "screensharing_webrtc_mediasoup_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# Teacher binary (default)
 [[bin]]
 name = "screensharing-webrtc-mediasoup"
 path = "src/main.rs"
-
-# Student binary (no server management)
-# [[bin]]
-# name = "screensharing-webrtc-mediasoup-student"
-# path = "src/main_student.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -70,4 +58,3 @@ enigo = "0.2"
 chrono = "0.4"
 # HTTP client for downloading documents
 reqwest = { version = "0.12", features = ["blocking"] }
-
