@@ -1,0 +1,38 @@
+[package]
+name = "mediasoup-rust-server"
+version = "0.1.0"
+edition = "2021"
+description = "Screen Sharing SFU Server using mediasoup (Rust)"
+
+[dependencies]
+# Mediasoup Rust bindings
+mediasoup = "0.20"
+
+# Async runtime
+tokio = { version = "1", features = ["full", "signal"] }
+
+# WebSocket
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+parking_lot = "0.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Network utilities
+local-ip-address = "0.6"
+
+# System info
+num_cpus = "1.16"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

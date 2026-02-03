@@ -25,4 +25,7 @@ dist-student/
 *.sw?
 .cursor/
 .agent/
+# Rust
+mediasoup-rust-server/target/
+
 # labmaster
