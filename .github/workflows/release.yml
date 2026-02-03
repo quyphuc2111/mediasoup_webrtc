@@ -25,15 +25,21 @@ jobs:
     env:
       # Keep build artifacts (mediasoup requirement)
       KEEP_BUILD_ARTIFACTS: '1'
+      # Use short target dir to avoid Windows path length issues
+      CARGO_TARGET_DIR: C:\t
+    defaults:
+      run:
+        working-directory: C:\src
     steps:
-      - name: Checkout
+      - name: Checkout to short path
         uses: actions/checkout@v4
+        with:
+          path: C:\src
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -51,11 +57,11 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
+          key: windows-cargo-${{ hashFiles('C:\src\**/Cargo.toml') }}
           restore-keys: |
             windows-cargo-
 
-      - name: Install frontend dependencies
+      - name: Install npm dependencies
         run: npm ci
 
       - name: Install Python dependencies for mediasoup
@@ -67,17 +73,18 @@ jobs:
         shell: pwsh
         run: |
           Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+          Add-MpPreference -ExclusionPath "C:\src"
+          Add-MpPreference -ExclusionPath "C:\t"
 
       - name: Build mediasoup-rust-server
         run: cargo build --release --verbose
-        working-directory: mediasoup-rust-server
+        working-directory: C:\src\mediasoup-rust-server
 
       - name: Prepare mediasoup-rust-server binary
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries/server
-          cp mediasoup-rust-server/target/release/mediasoup-rust-server.exe src-tauri/binaries/server/
+          mkdir -p C:/src/src-tauri/binaries/server
+          cp C:/t/release/mediasoup-rust-server.exe C:/src/src-tauri/binaries/server/
 
       - name: Build frontend
         run: npm run build
@@ -87,6 +94,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          projectPath: C:\src
           tagName: ${{ github.ref_name || github.event.inputs.version }}
           releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
           releaseBody: |
