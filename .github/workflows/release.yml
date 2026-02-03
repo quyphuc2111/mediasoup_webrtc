@@ -27,14 +27,15 @@ jobs:
       KEEP_BUILD_ARTIFACTS: '1'
       # Use short target dir to avoid Windows path length issues
       CARGO_TARGET_DIR: C:\t
-    defaults:
-      run:
-        working-directory: C:\src
     steps:
-      - name: Checkout to short path
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          path: C:\src
+
+      - name: Create short path junction
+        shell: cmd
+        run: |
+          mkdir C:\t
+          mklink /J C:\s "${{ github.workspace }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -57,12 +58,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: windows-cargo-${{ hashFiles('C:\src\**/Cargo.toml') }}
+          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
             windows-cargo-
 
       - name: Install npm dependencies
         run: npm ci
+        working-directory: C:\s
 
       - name: Install Python dependencies for mediasoup
         run: |
@@ -73,28 +75,29 @@ jobs:
         shell: pwsh
         run: |
           Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
-          Add-MpPreference -ExclusionPath "C:\src"
+          Add-MpPreference -ExclusionPath "C:\s"
           Add-MpPreference -ExclusionPath "C:\t"
 
       - name: Build mediasoup-rust-server
         run: cargo build --release --verbose
-        working-directory: C:\src\mediasoup-rust-server
+        working-directory: C:\s\mediasoup-rust-server
 
       - name: Prepare mediasoup-rust-server binary
         shell: bash
         run: |
-          mkdir -p C:/src/src-tauri/binaries/server
-          cp C:/t/release/mediasoup-rust-server.exe C:/src/src-tauri/binaries/server/
+          mkdir -p C:/s/src-tauri/binaries/server
+          cp C:/t/release/mediasoup-rust-server.exe C:/s/src-tauri/binaries/server/
 
       - name: Build frontend
         run: npm run build
+        working-directory: C:\s
 
       - name: Build Tauri Teacher App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: C:\src
+          projectPath: C:\s
           tagName: ${{ github.ref_name || github.event.inputs.version }}
           releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
           releaseBody: |
