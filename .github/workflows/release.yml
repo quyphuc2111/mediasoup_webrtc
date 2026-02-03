@@ -21,6 +21,9 @@ jobs:
   build-windows-teacher:
     name: Build Windows Teacher
     runs-on: windows-latest
+    env:
+      # Use short path to avoid Windows path length issues with mediasoup-sys
+      CARGO_TARGET_DIR: C:\t
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,9 +40,13 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies for mediasoup
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install invoke meson ninja
+          python -m pip install invoke meson ninja
+          # Verify installation
+          python -c "import invoke; print('invoke OK')"
+          python -c "import meson; print('meson OK')"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -51,20 +58,27 @@ jobs:
         with:
           workspaces: |
             ./src-tauri -> target
-            ./mediasoup-rust-server -> target
+          cache-targets: false
 
       - name: Install frontend dependencies
         run: npm ci
 
       - name: Build mediasoup-rust-server
-        run: cargo build --release
+        shell: pwsh
+        env:
+          # Ensure Python can find installed modules
+          PYTHONPATH: ${{ env.pythonLocation }}\Lib\site-packages
+        run: |
+          # Add Python Scripts to PATH for meson/ninja executables
+          $env:PATH = "${{ env.pythonLocation }}\Scripts;$env:PATH"
+          cargo build --release
         working-directory: mediasoup-rust-server
 
       - name: Prepare mediasoup-rust-server binary
         shell: bash
         run: |
           mkdir -p src-tauri/binaries/server
-          cp mediasoup-rust-server/target/release/mediasoup-rust-server.exe src-tauri/binaries/server/
+          cp C:/t/release/mediasoup-rust-server.exe src-tauri/binaries/server/
 
       - name: Build frontend
         run: npm run build
@@ -73,6 +87,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_TARGET_DIR: target
         with:
           tagName: ${{ github.ref_name || github.event.inputs.version }}
           releaseName: 'SmartlabPromax ${{ github.ref_name || github.event.inputs.version }}'
@@ -249,3 +264,4 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --config src-tauri/tauri.student.conf.json --target universal-apple-darwin --bundles dmg
+
