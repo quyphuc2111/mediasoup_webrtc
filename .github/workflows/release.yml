@@ -62,13 +62,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Disable Windows Defender for build folder
+        shell: pwsh
+        run: |
+          # Disable real-time scanning for build paths to avoid ninja race condition
+          Add-MpPreference -ExclusionPath "C:\t"
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       - name: Build mediasoup-rust-server
         shell: pwsh
         env:
-          # Ensure Python can find installed modules
           PYTHONPATH: ${{ env.pythonLocation }}\Lib\site-packages
         run: |
-          # Add Python Scripts to PATH for meson/ninja executables
           $env:PATH = "${{ env.pythonLocation }}\Scripts;$env:PATH"
           cargo build --release
         working-directory: mediasoup-rust-server
