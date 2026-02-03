@@ -9,6 +9,7 @@ import {
 import { UserAccount as UserType, Message, UserRole } from '../types';
 import { useMediasoup } from '../hooks/useMediasoup';
 import { VideoPlayer } from '../components/VideoPlayer';
+import { SharingIndicator } from '../components/SharingIndicator';
 
 interface ServerInfo {
   url: string;
@@ -831,6 +832,11 @@ const OnlineClassroom: React.FC<OnlineClassroomProps> = ({ user, onStartScreenSh
         </div>
       </div>
       </div>
+
+      {/* Custom Sharing Indicator - only show for Teacher when sharing */}
+      {user.role === UserRole.TEACHER && isSharing && (
+        <SharingIndicator onStop={stopScreenShare} />
+      )}
     </div>
   );
 };

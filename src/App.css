@@ -2380,3 +2380,123 @@ h1 {
   padding: 2rem;
   text-align: center;
 }
+
+
+/* ============================================
+   Screen Sharing Indicator Customization
+   ============================================ */
+
+/* Hide browser's native screen sharing indicator (may not work on all browsers/WebViews) */
+::-webkit-media-controls-panel {
+  display: none !important;
+  opacity: 0 !important;
+}
+
+/* Try to hide the indicator bar */
+[data-screen-share-indicator],
+[class*="screen-share"],
+[class*="sharing-indicator"] {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/* Custom minimal screen sharing indicator */
+.custom-sharing-indicator {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 9999;
+  background: rgba(239, 68, 68, 0.9);
+  backdrop-filter: blur(10px);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  cursor: move;
+  user-select: none;
+  transition: opacity 0.3s;
+}
+
+.custom-sharing-indicator:hover {
+  opacity: 0.8;
+}
+
+.custom-sharing-indicator .recording-dot {
+  width: 8px;
+  height: 8px;
+  background: white;
+  border-radius: 50%;
+  animation: recording-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
+.custom-sharing-indicator .indicator-text {
+  font-size: 0.85rem;
+}
+
+.custom-sharing-indicator .stop-btn {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-left: 8px;
+}
+
+.custom-sharing-indicator .stop-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.custom-sharing-indicator .hide-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.7);
+  padding: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+  margin-left: 4px;
+}
+
+.custom-sharing-indicator .hide-btn:hover {
+  color: white;
+}
+
+/* Minimized state */
+.custom-sharing-indicator.minimized {
+  padding: 6px 12px;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  justify-content: center;
+}
+
+.custom-sharing-indicator.minimized .indicator-text,
+.custom-sharing-indicator.minimized .stop-btn,
+.custom-sharing-indicator.minimized .hide-btn {
+  display: none;
+}
+
+.custom-sharing-indicator.minimized .recording-dot {
+  margin: 0;
+}

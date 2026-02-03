@@ -1,4 +1,6 @@
-# This folder will contain:
-# - node/ (Node.js portable)
-# - server/ (Mediasoup server dist + node_modules)
-# These are added during CI build
+# This folder will contain mediasoup-rust-server binary
+# Built during CI and copied to server/ subdirectory:
+# - Windows: server/mediasoup-rust-server.exe
+# - macOS: server/mediasoup-rust-server
+# - Linux: server/mediasoup-rust-server
+# These binaries are generated during build and NOT tracked in git

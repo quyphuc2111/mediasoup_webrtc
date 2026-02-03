@@ -31,4 +31,5 @@ mediasoup-rust-server/target/
 src-tauri/target/
 
 # Bundled binaries (generated during build)
-src-tauri/binaries/server/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
