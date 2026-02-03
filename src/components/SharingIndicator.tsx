@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Minus } from 'lucide-react';
+import { Minus } from 'lucide-react';
 
 interface SharingIndicatorProps {
   onStop: () => void;
