@@ -21,11 +21,8 @@ jobs:
   build-windows-teacher:
     name: Build Windows Teacher
     runs-on: windows-2022
+    timeout-minutes: 120
     env:
-      # Use short paths for BOTH cargo home and target to avoid path length issues
-      # Both must be on same root to avoid relative path issues in Meson
-      CARGO_HOME: C:\cargo
-      CARGO_TARGET_DIR: C:\cargo\target
       # Keep build artifacts (mediasoup requirement)
       KEEP_BUILD_ARTIFACTS: '1'
     steps:
@@ -52,8 +49,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            C:\cargo\registry
-            C:\cargo\git
+            ~/.cargo/registry
+            ~/.cargo/git
           key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: |
             windows-cargo-
@@ -64,7 +61,7 @@ jobs:
       - name: Disable Windows Defender for build folders
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath "C:\cargo"
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo"
           Add-MpPreference -ExclusionPath "${{ github.workspace }}"
 
       - name: Build mediasoup-rust-server
@@ -75,7 +72,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p src-tauri/binaries/server
-          cp C:/cargo/target/release/mediasoup-rust-server.exe src-tauri/binaries/server/
+          cp mediasoup-rust-server/target/release/mediasoup-rust-server.exe src-tauri/binaries/server/
 
       - name: Build frontend
         run: npm run build
