@@ -21,73 +21,57 @@ jobs:
   build-windows-teacher:
     name: Build Windows Teacher
     runs-on: windows-2022
-    timeout-minutes: 120
-    env:
-      # Keep build artifacts (mediasoup requirement)
-      KEEP_BUILD_ARTIFACTS: '1'
-      # Use short paths to avoid Windows path length issues
-      # CARGO_HOME needs short path because mediasoup-sys source is in registry
-      CARGO_HOME: C:\c
-      CARGO_TARGET_DIR: C:\t
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Create cargo directories
-        shell: cmd
-        run: |
-          mkdir C:\c
-          mkdir C:\t
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+          cache: 'npm'
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Configure Cargo cache
-        uses: actions/cache@v4
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
         with:
-          path: |
-            C:\c\registry
-            C:\c\git
-          key: windows-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            windows-cargo-
+          workspaces: ./src-tauri -> target
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Install Python dependencies for mediasoup
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          pip install invoke meson ninja
+      # NOTE: mediasoup-rust-server is pre-built and included in src-tauri/binaries/server
+      # Make sure mediasoup-rust-server.exe exists before running this workflow
+      # Uncomment the following steps if you need to rebuild it from source
+      # - name: Install Python dependencies for mediasoup
+      #   run: |
+      #     python -m pip install --upgrade pip setuptools wheel
+      #     pip install invoke meson ninja
 
-      - name: Disable Windows Defender for build folders
-        shell: pwsh
-        run: |
-          Add-MpPreference -ExclusionPath "C:\c"
-          Add-MpPreference -ExclusionPath "C:\t"
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+      # - name: Build mediasoup-rust-server
+      #   run: cargo build --release --verbose
+      #   working-directory: mediasoup-rust-server
 
-      - name: Build mediasoup-rust-server
-        run: cargo build --release --verbose
-        working-directory: mediasoup-rust-server
+      # - name: Prepare mediasoup-rust-server binary
+      #   shell: bash
+      #   run: |
+      #     mkdir -p src-tauri/binaries/server
+      #     cp C:/t/release/mediasoup-rust-server.exe src-tauri/binaries/server/
 
-      - name: Prepare mediasoup-rust-server binary
+      - name: Verify mediasoup-rust-server binary exists
         shell: bash
         run: |
-          mkdir -p src-tauri/binaries/server
-          cp C:/t/release/mediasoup-rust-server.exe src-tauri/binaries/server/
+          if [ ! -f "src-tauri/binaries/server/mediasoup-rust-server.exe" ]; then
+            echo "ERROR: mediasoup-rust-server.exe not found in src-tauri/binaries/server/"
+            echo "Please build and add the Windows binary before running this workflow"
+            exit 1
+          fi
+          echo "✅ mediasoup-rust-server.exe found"
 
       - name: Build frontend
         run: npm run build
