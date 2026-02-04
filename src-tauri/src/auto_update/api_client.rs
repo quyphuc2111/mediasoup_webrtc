@@ -13,6 +13,8 @@ pub struct UpdateApiClient {
     http_client: Client,
     /// Update channel (stable, beta, dev)
     channel: String,
+    /// Application type (teacher, student)
+    app_type: String,
     /// Operating system identifier
     os: String,
     /// Architecture identifier
@@ -25,11 +27,13 @@ impl UpdateApiClient {
     /// # Arguments
     /// * `base_url` - Base URL for the Update API (e.g., "https://updates.smartlab.example.com")
     /// * `channel` - Update channel (stable, beta, dev)
-    pub fn new(base_url: &str, channel: &str) -> Self {
+    /// * `app_type` - Application type (teacher, student)
+    pub fn new(base_url: &str, channel: &str, app_type: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http_client: Client::new(),
             channel: channel.to_string(),
+            app_type: app_type.to_string(),
             os: Self::detect_os(),
             arch: Self::detect_arch(),
         }
@@ -37,7 +41,7 @@ impl UpdateApiClient {
 
     /// Create a new client from UpdateConfig
     pub fn from_config(config: &UpdateConfig) -> Self {
-        Self::new(&config.api_base_url, &config.channel)
+        Self::new(&config.api_base_url, &config.channel, &config.app_type)
     }
 
     /// Detect the current operating system
@@ -76,18 +80,18 @@ impl UpdateApiClient {
     /// * `Ok(UpdateInfo)` - Latest version information
     /// * `Err(UpdateError)` - Error if request fails or response is invalid
     pub async fn get_latest_version(&self) -> Result<UpdateInfo, UpdateError> {
-        // URL format: {base_url}/updates/latest?channel=...&os=...&arch=...
+        // URL format: {base_url}/updates/latest?app_type=...&channel=...&os=...&arch=...
         // If base_url already contains /api, use /updates/latest
         // Otherwise, use /api/updates/latest for backward compatibility
         let url = if self.base_url.ends_with("/api") {
             format!(
-                "{}/updates/latest?channel={}&os={}&arch={}",
-                self.base_url, self.channel, self.os, self.arch
+                "{}/updates/latest?app_type={}&channel={}&os={}&arch={}",
+                self.base_url, self.app_type, self.channel, self.os, self.arch
             )
         } else {
             format!(
-                "{}/api/updates/latest?channel={}&os={}&arch={}",
-                self.base_url, self.channel, self.os, self.arch
+                "{}/api/updates/latest?app_type={}&channel={}&os={}&arch={}",
+                self.base_url, self.app_type, self.channel, self.os, self.arch
             )
         };
 
@@ -230,14 +234,14 @@ mod tests {
 
     #[test]
     fn test_new_client() {
-        let client = UpdateApiClient::new("http://localhost:3030/api", "stable");
+        let client = UpdateApiClient::new("http://localhost:3030/api", "stable", "teacher");
         assert_eq!(client.base_url(), "http://localhost:3030/api");
         assert_eq!(client.channel(), "stable");
     }
 
     #[test]
     fn test_new_client_trims_trailing_slash() {
-        let client = UpdateApiClient::new("http://localhost:3030/api/", "beta");
+        let client = UpdateApiClient::new("http://localhost:3030/api/", "beta", "student");
         assert_eq!(client.base_url(), "http://localhost:3030/api");
     }
 
@@ -246,6 +250,7 @@ mod tests {
         let config = UpdateConfig {
             api_base_url: "http://localhost:3030/api".to_string(),
             channel: "dev".to_string(),
+            app_type: "teacher".to_string(),
             ..Default::default()
         };
         let client = UpdateApiClient::from_config(&config);

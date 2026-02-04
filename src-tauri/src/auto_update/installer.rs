@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
+#[cfg(target_os = "windows")]
+use std::io::Result as IoResult;
 
 /// Error types for installation operations
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,6 +103,37 @@ impl InstallerType {
 pub struct InstallerRunner;
 
 impl InstallerRunner {
+    /// Run a program with elevated (admin) privileges on Windows
+    /// Uses ShellExecuteW with "runas" verb to trigger UAC prompt
+    #[cfg(target_os = "windows")]
+    fn run_elevated(exe_path: &str, args: &[&str]) -> IoResult<std::process::Output> {
+        use std::os::windows::ffi::OsStrExt;
+        use std::ffi::OsStr;
+        use std::ptr::null_mut;
+        
+        // For elevated execution, we need to use a different approach
+        // Since ShellExecuteW doesn't give us output, we'll use a workaround:
+        // Run the installer and wait for it to complete
+        
+        log::info!("[Installer] Attempting elevated execution of: {}", exe_path);
+        
+        // Build the arguments string
+        let args_str = args.join(" ");
+        
+        // Use PowerShell Start-Process with -Verb RunAs for elevation
+        let ps_command = format!(
+            "Start-Process -FilePath '{}' -ArgumentList '{}' -Verb RunAs -Wait -PassThru | Select-Object -ExpandProperty ExitCode",
+            exe_path.replace("'", "''"),
+            args_str.replace("'", "''")
+        );
+        
+        log::info!("[Installer] PowerShell command: {}", ps_command);
+        
+        Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_command])
+            .output()
+    }
+
     /// Detect installer type from file extension and header
     /// 
     /// # Arguments
@@ -193,17 +226,62 @@ impl InstallerRunner {
             .to_str()
             .ok_or_else(|| InstallError::InvalidPath("Path contains invalid UTF-8".to_string()))?;
 
+        log::info!("[Installer] Running installer: {} (type: {:?})", installer_path_str, installer_type);
+        log::info!("[Installer] Silent args: {:?}", installer_type.silent_args());
+
         let output = match installer_type {
             InstallerType::Msi => {
                 // Use msiexec for MSI files
+                log::info!("[Installer] Using msiexec for MSI installation");
                 Command::new("msiexec")
                     .arg("/i")
                     .arg(installer_path_str)
                     .args(installer_type.silent_args())
                     .output()
             }
+            InstallerType::NsisExe => {
+                // NSIS installer - run with /S flag
+                // For per-user installers (Student app), no elevation needed
+                // For per-machine installers (Teacher app), request elevation
+                log::info!("[Installer] Running NSIS installer with /S flag");
+                
+                // First try without elevation (works for per-user installers)
+                let result = Command::new(installer_path_str)
+                    .arg("/S")
+                    .output();
+                
+                match &result {
+                    Ok(output) if output.status.success() => {
+                        log::info!("[Installer] NSIS installer completed successfully (no elevation needed)");
+                        result
+                    }
+                    Ok(output) => {
+                        let exit_code = output.status.code().unwrap_or(-1);
+                        // Exit code 740 means elevation required
+                        if exit_code == 740 {
+                            log::info!("[Installer] Elevation required, requesting admin rights...");
+                            Self::run_elevated(installer_path_str, &["/S"])
+                        } else {
+                            result
+                        }
+                    }
+                    Err(_) => {
+                        // Try with elevation as fallback
+                        log::info!("[Installer] Direct execution failed, trying with elevation...");
+                        Self::run_elevated(installer_path_str, &["/S"])
+                    }
+                }
+            }
+            InstallerType::InnoSetupExe => {
+                // Inno Setup - run with /VERYSILENT
+                log::info!("[Installer] Running Inno Setup installer");
+                Command::new(installer_path_str)
+                    .args(installer_type.silent_args())
+                    .output()
+            }
             _ => {
-                // For EXE installers, run directly with silent args
+                // For other EXE installers, run directly with silent args
+                log::info!("[Installer] Running generic EXE installer");
                 Command::new(installer_path_str)
                     .args(installer_type.silent_args())
                     .output()
@@ -212,11 +290,22 @@ impl InstallerRunner {
 
         match output {
             Ok(output) => {
+                log::info!("[Installer] Installer exit status: {:?}", output.status);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stdout.is_empty() {
+                    log::info!("[Installer] stdout: {}", stdout);
+                }
+                if !stderr.is_empty() {
+                    log::warn!("[Installer] stderr: {}", stderr);
+                }
+                
                 if output.status.success() {
+                    log::info!("[Installer] Installation completed successfully");
                     Ok(())
                 } else {
                     let exit_code = output.status.code().unwrap_or(-1);
-                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::error!("[Installer] Installation failed with exit code: {}", exit_code);
                     Err(InstallError::InstallerFailed {
                         exit_code,
                         message: if stderr.is_empty() {
@@ -227,7 +316,10 @@ impl InstallerRunner {
                     })
                 }
             }
-            Err(e) => Err(InstallError::ExecutionFailed(e.to_string())),
+            Err(e) => {
+                log::error!("[Installer] Failed to execute installer: {}", e);
+                Err(InstallError::ExecutionFailed(e.to_string()))
+            }
         }
     }
 
@@ -279,8 +371,6 @@ impl InstallerRunner {
     /// Install DMG on macOS
     #[cfg(target_os = "macos")]
     fn install_dmg(dmg_path: &Path) -> Result<(), InstallError> {
-        use std::process::Stdio;
-        
         let dmg_path_str = dmg_path.to_str()
             .ok_or_else(|| InstallError::InvalidPath("Path contains invalid UTF-8".to_string()))?;
 
@@ -352,7 +442,12 @@ impl InstallerRunner {
 
         // Unmount DMG
         cleanup();
-        log::info!("[Installer] DMG installation completed successfully");
+        
+        // Store the installed app path for restart
+        // We'll use an environment variable to pass this to restart_app
+        std::env::set_var("SMARTLAB_INSTALLED_APP_PATH", dest_app.to_str().unwrap());
+        
+        log::info!("[Installer] DMG installation completed successfully. App installed at: {:?}", dest_app);
 
         Ok(())
     }

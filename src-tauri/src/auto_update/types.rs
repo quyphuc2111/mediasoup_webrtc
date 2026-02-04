@@ -65,6 +65,9 @@ pub struct UpdateConfig {
     /// Update channel (stable, beta, dev)
     pub channel: String,
     
+    /// Application type (teacher, student)
+    pub app_type: String,
+    
     /// Check interval in seconds (default: 14400 = 4 hours)
     pub check_interval_secs: u64,
     
@@ -87,6 +90,7 @@ impl Default for UpdateConfig {
             // Default to LAN IP - can be overridden by config file
             api_base_url: "http://192.168.1.36:3030/api".to_string(),
             channel: "stable".to_string(),
+            app_type: "teacher".to_string(), // Default to teacher app
             check_interval_secs: 14400, // 4 hours
             auto_download: false,
             lan_server_port: 9280,
@@ -217,6 +221,7 @@ mod tests {
     fn test_update_config_default() {
         let config = UpdateConfig::default();
         assert_eq!(config.channel, "stable");
+        assert_eq!(config.app_type, "teacher");
         assert_eq!(config.check_interval_secs, 14400);
         assert!(!config.auto_download);
         assert_eq!(config.lan_server_port, 9280);
