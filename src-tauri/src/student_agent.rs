@@ -29,6 +29,19 @@ pub enum AgentStatus {
     WaitingForTeacher,
     Authenticating,
     Connected { teacher_name: String, teacher_ip: String },
+    /// Update is required before accessing main functionality
+    /// Requirements: 6.1, 6.2
+    UpdateRequired {
+        current_version: String,
+        required_version: String,
+        update_url: Option<String>,
+    },
+    /// Update is being downloaded
+    Updating {
+        progress: f32,
+        current_version: String,
+        required_version: String,
+    },
     Error { message: String },
 }
 
@@ -141,6 +154,16 @@ pub enum TeacherMessage {
 
     #[serde(rename = "logout")]
     Logout,
+
+    /// Version handshake response from teacher
+    /// Requirements: 5.2, 5.3
+    #[serde(rename = "version_handshake_response")]
+    VersionHandshakeResponse {
+        required_version: String,
+        mandatory_update: bool,
+        update_url: Option<String>,
+        sha256: Option<String>,
+    },
 }
 
 /// Messages from student to teacher
@@ -150,6 +173,13 @@ pub enum StudentMessage {
     #[serde(rename = "welcome")]
     Welcome {
         student_name: String,
+        /// Current version of the student app for version handshake
+        /// Requirements: 5.1
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_version: Option<String>,
+        /// Machine name for identification
+        #[serde(skip_serializing_if = "Option::is_none")]
+        machine_name: Option<String>,
     },
 
     #[serde(rename = "screen_ready")]
@@ -191,6 +221,14 @@ pub enum StudentMessage {
 
     #[serde(rename = "error")]
     Error { message: String },
+
+    /// Update status notification to teacher
+    #[serde(rename = "update_status")]
+    UpdateStatus {
+        status: String, // "downloading", "verifying", "installing", "completed", "failed"
+        progress: Option<f32>,
+        error: Option<String>,
+    },
 }
 
 /// Connection state for a single teacher connection
@@ -200,6 +238,9 @@ struct TeacherConnection {
     screen_sharing: bool,
     stop_capture: Option<Arc<AtomicBool>>,
     keyframe_request_tx: Option<broadcast::Sender<()>>,
+    /// Whether this connection requires an update before full functionality
+    /// Requirements: 6.1, 6.2
+    update_required: bool,
 }
 
 /// State shared across the agent
@@ -208,6 +249,8 @@ pub struct AgentState {
     pub config: Mutex<AgentConfig>,
     pub shutdown_tx: Mutex<Option<broadcast::Sender<()>>>,
     connections: Mutex<HashMap<SocketAddr, TeacherConnection>>,
+    /// Current app version for version handshake
+    pub current_version: Mutex<String>,
 }
 
 impl Default for AgentState {
@@ -217,6 +260,7 @@ impl Default for AgentState {
             config: Mutex::new(AgentConfig::default()),
             shutdown_tx: Mutex::new(None),
             connections: Mutex::new(HashMap::new()),
+            current_version: Mutex::new(env!("CARGO_PKG_VERSION").to_string()),
         }
     }
 }
@@ -239,6 +283,23 @@ impl AgentState {
             .unwrap_or(AgentStatus::Error {
                 message: "Lock error".to_string(),
             })
+    }
+
+    /// Get the current app version
+    pub fn get_current_version(&self) -> String {
+        self.current_version
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_else(|_| "0.0.0".to_string())
+    }
+
+    /// Check if any connection requires an update
+    /// Requirements: 6.2
+    pub fn is_update_required(&self) -> bool {
+        matches!(
+            self.get_status(),
+            AgentStatus::UpdateRequired { .. } | AgentStatus::Updating { .. }
+        )
     }
 }
 
@@ -278,6 +339,7 @@ async fn handle_connection(
                 screen_sharing: false,
                 stop_capture: None,
                 keyframe_request_tx: None,
+                update_required: false,
             },
         );
     }
@@ -285,22 +347,36 @@ async fn handle_connection(
     // Channel for screen frames
     let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(2);
 
-    // Get student name
+    // Get student name and version
     let student_name = state
         .config
         .lock()
         .map(|c| c.student_name.clone())
         .unwrap_or_else(|_| "Student".to_string());
 
-    // Send welcome message (no auth required)
+    let current_version = state.get_current_version();
+    let machine_name = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "Unknown".to_string());
+
+    // Send welcome message with version info for handshake
+    // Requirements: 5.1 - THE Student_App SHALL send its current_version in the connection request
     let welcome = StudentMessage::Welcome {
         student_name: student_name.clone(),
+        current_version: Some(current_version.clone()),
+        machine_name: Some(machine_name),
     };
 
     if let Err(e) = send_message(&mut write, &welcome).await {
         log::error!("[StudentAgent] Failed to send welcome: {}", e);
         return;
     }
+
+    log::info!(
+        "[StudentAgent] Sent welcome with version {} to {}",
+        current_version,
+        addr
+    );
 
     // Auto-connect: set status to Connected and start screen capture immediately
     let teacher_ip = addr.ip().to_string();
@@ -627,6 +703,61 @@ where
             std::thread::spawn(|| {
                 execute_logout();
             });
+        }
+
+        // Handle version handshake response from teacher
+        // Requirements: 6.1, 6.2, 6.4
+        TeacherMessage::VersionHandshakeResponse {
+            required_version,
+            mandatory_update,
+            update_url,
+            sha256: _,
+        } => {
+            log::info!(
+                "[StudentAgent] Received version handshake response: required={}, mandatory={}",
+                required_version,
+                mandatory_update
+            );
+
+            if mandatory_update {
+                let current_version = state.get_current_version();
+
+                // Update connection state to mark update required
+                {
+                    let mut conns = state.connections.lock().unwrap();
+                    if let Some(conn) = conns.get_mut(&addr) {
+                        conn.update_required = true;
+                    }
+                }
+
+                // Set status to UpdateRequired - this will block main functionality
+                // Requirements: 6.1 - THE Student_App SHALL display an "Update Required" screen
+                state.set_status(AgentStatus::UpdateRequired {
+                    current_version: current_version.clone(),
+                    required_version: required_version.clone(),
+                    update_url: update_url.clone(),
+                });
+
+                log::warn!(
+                    "[StudentAgent] Update required: {} -> {}",
+                    current_version,
+                    required_version
+                );
+
+                // Send update status to teacher
+                let status_msg = StudentMessage::UpdateStatus {
+                    status: "update_required".to_string(),
+                    progress: None,
+                    error: None,
+                };
+                send_message(write, &status_msg).await?;
+
+                // Requirements: 6.4 - THE Student_App SHALL automatically initiate the update download
+                // Note: The actual download will be triggered by the frontend or a separate update coordinator
+                // For now, we just set the status and let the UI handle the download initiation
+            } else {
+                log::info!("[StudentAgent] Version matches, no update required");
+            }
         }
     }
 
@@ -1506,10 +1637,49 @@ mod tests {
     fn test_message_serialization() {
         let msg = StudentMessage::Welcome {
             student_name: "Test".to_string(),
+            current_version: Some("1.0.0".to_string()),
+            machine_name: Some("TestPC".to_string()),
         };
 
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("welcome"));
         assert!(json.contains("Test"));
+        assert!(json.contains("1.0.0"));
+    }
+
+    #[test]
+    fn test_agent_state_update_required() {
+        let state = AgentState::new();
+        
+        state.set_status(AgentStatus::UpdateRequired {
+            current_version: "1.0.0".to_string(),
+            required_version: "1.1.0".to_string(),
+            update_url: Some("http://localhost:9280/update".to_string()),
+        });
+        
+        assert!(state.is_update_required());
+    }
+
+    #[test]
+    fn test_agent_state_version() {
+        let state = AgentState::new();
+        let version = state.get_current_version();
+        // Should return the CARGO_PKG_VERSION
+        assert!(!version.is_empty());
+    }
+
+    #[test]
+    fn test_version_handshake_response_serialization() {
+        let msg = TeacherMessage::VersionHandshakeResponse {
+            required_version: "1.1.0".to_string(),
+            mandatory_update: true,
+            update_url: Some("http://localhost:9280/update".to_string()),
+            sha256: Some("abc123".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("version_handshake_response"));
+        assert!(json.contains("1.1.0"));
+        assert!(json.contains("mandatory_update"));
     }
 }

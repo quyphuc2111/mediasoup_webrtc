@@ -56,5 +56,19 @@ rayon = "1.8"
 enigo = "0.2"
 # Timestamp for file transfer job IDs
 chrono = "0.4"
-# HTTP client for downloading documents
-reqwest = { version = "0.12", features = ["blocking"] }
+# HTTP client for downloading documents and updates
+reqwest = { version = "0.12", features = ["blocking", "json", "stream"] }
+# SHA256 hashing for update verification
+sha2 = "0.10"
+# HTTP server for LAN update distribution
+axum = "0.7"
+# Async file serving
+tokio-util = { version = "0.7", features = ["io"] }
+# HTTP types for range requests
+http = "1.0"
+# HTTP body types
+http-body-util = "0.1"
+
+[dev-dependencies]
+# Temporary file handling for tests
+tempfile = "3"

@@ -24,6 +24,37 @@ pub enum ConnectionStatus {
     Error { message: String },
 }
 
+/// Update status for a student client
+/// Requirements: 10.5
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub enum ClientUpdateState {
+    /// Student is up to date
+    UpToDate,
+    /// Student needs to update
+    UpdateRequired,
+    /// Student is downloading update
+    Downloading { progress: f32 },
+    /// Student is verifying update
+    Verifying,
+    /// Student is installing update
+    Installing,
+    /// Update failed
+    Failed { error: String },
+}
+
+/// Client update status for tracking student updates
+/// Requirements: 10.5, 10.6
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ClientUpdateStatus {
+    pub client_id: String,
+    pub machine_name: Option<String>,
+    pub ip: String,
+    pub current_version: Option<String>,
+    pub status: ClientUpdateState,
+    pub progress: Option<f32>,
+    pub last_updated: u64,
+}
+
 /// Information about a student connection
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct StudentConnection {
@@ -32,6 +63,13 @@ pub struct StudentConnection {
     pub port: u16,
     pub name: Option<String>,
     pub status: ConnectionStatus,
+    /// Student's current version (from handshake)
+    /// Requirements: 10.5
+    pub current_version: Option<String>,
+    /// Machine name for identification
+    pub machine_name: Option<String>,
+    /// Update status for this student
+    pub update_status: Option<ClientUpdateState>,
 }
 
 /// Messages from student to teacher (same as in student_agent)
@@ -41,6 +79,13 @@ pub enum StudentMessage {
     #[serde(rename = "welcome")]
     Welcome {
         student_name: String,
+        /// Current version of the student app for version handshake
+        /// Requirements: 5.1
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_version: Option<String>,
+        /// Machine name for identification
+        #[serde(skip_serializing_if = "Option::is_none")]
+        machine_name: Option<String>,
     },
 
     #[serde(rename = "screen_ready")]
@@ -75,6 +120,21 @@ pub enum StudentMessage {
 
     #[serde(rename = "error")]
     Error { message: String },
+
+    /// Update status notification from student
+    #[serde(rename = "update_status")]
+    UpdateStatus {
+        status: String, // "downloading", "verifying", "installing", "completed", "failed"
+        progress: Option<f32>,
+        error: Option<String>,
+    },
+
+    /// Acknowledgment of update_required broadcast
+    /// Requirements: 14.4
+    #[serde(rename = "update_acknowledged")]
+    UpdateAcknowledged {
+        version: String,
+    },
 }
 
 /// Mouse button type
@@ -170,6 +230,25 @@ pub enum TeacherMessage {
 
     #[serde(rename = "logout")]
     Logout,
+
+    /// Version handshake response to student
+    /// Requirements: 5.2, 5.3
+    #[serde(rename = "version_handshake_response")]
+    VersionHandshakeResponse {
+        required_version: String,
+        mandatory_update: bool,
+        update_url: Option<String>,
+        sha256: Option<String>,
+    },
+
+    /// Broadcast update required notification to all students
+    /// Requirements: 14.1, 14.2
+    #[serde(rename = "update_required")]
+    UpdateRequired {
+        required_version: String,
+        update_url: String,
+        sha256: Option<String>,
+    },
 }
 
 /// Command to send to a connection handler
@@ -223,6 +302,15 @@ pub struct ConnectorState {
     pub screen_sizes: Mutex<HashMap<String, (u32, u32)>>,
     pub decoders: Mutex<HashMap<String, crate::h264_decoder::H264Decoder>>,
     pub directory_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<Vec<crate::file_transfer::FileInfo>, String>>>>,
+    /// Current teacher app version for version handshake
+    pub current_version: Mutex<String>,
+    /// LAN distribution server URL (if running)
+    pub lan_update_url: Mutex<Option<String>>,
+    /// SHA256 hash of the update package (if available)
+    pub update_sha256: Mutex<Option<String>>,
+    /// Track which students have acknowledged the update notification
+    /// Requirements: 14.4
+    pub update_acknowledgments: Mutex<HashMap<String, bool>>,
 }
 
 impl Default for ConnectorState {
@@ -234,6 +322,10 @@ impl Default for ConnectorState {
             screen_sizes: Mutex::new(HashMap::new()),
             decoders: Mutex::new(HashMap::new()),
             directory_responses: Mutex::new(HashMap::new()),
+            current_version: Mutex::new(env!("CARGO_PKG_VERSION").to_string()),
+            lan_update_url: Mutex::new(None),
+            update_sha256: Mutex::new(None),
+            update_acknowledgments: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -268,6 +360,158 @@ impl ConnectorState {
                 conn.name = Some(name);
             }
         }
+    }
+
+    /// Update student version info from handshake
+    /// Requirements: 10.5
+    pub fn update_student_version(&self, id: &str, version: String, machine_name: Option<String>) {
+        if let Ok(mut conns) = self.connections.lock() {
+            if let Some(conn) = conns.get_mut(id) {
+                conn.current_version = Some(version);
+                conn.machine_name = machine_name;
+            }
+        }
+    }
+
+    /// Update student's update status
+    /// Requirements: 10.5
+    pub fn update_student_update_status(&self, id: &str, update_status: ClientUpdateState) {
+        if let Ok(mut conns) = self.connections.lock() {
+            if let Some(conn) = conns.get_mut(id) {
+                conn.update_status = Some(update_status);
+            }
+        }
+    }
+
+    /// Get the current teacher version
+    pub fn get_current_version(&self) -> String {
+        self.current_version
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_else(|_| "0.0.0".to_string())
+    }
+
+    /// Get the LAN update URL if available
+    pub fn get_lan_update_url(&self) -> Option<String> {
+        self.lan_update_url.lock().ok()?.clone()
+    }
+
+    /// Get the update SHA256 hash if available
+    pub fn get_update_sha256(&self) -> Option<String> {
+        self.update_sha256.lock().ok()?.clone()
+    }
+
+    /// Set the LAN distribution info
+    pub fn set_lan_distribution(&self, url: Option<String>, sha256: Option<String>) {
+        if let Ok(mut u) = self.lan_update_url.lock() {
+            *u = url;
+        }
+        if let Ok(mut h) = self.update_sha256.lock() {
+            *h = sha256;
+        }
+    }
+
+    /// Check if all connected students are up to date
+    /// Requirements: 14.5
+    pub fn all_students_up_to_date(&self) -> bool {
+        if let Ok(conns) = self.connections.lock() {
+            conns.values().all(|conn| {
+                matches!(conn.update_status, Some(ClientUpdateState::UpToDate) | None)
+            })
+        } else {
+            false
+        }
+    }
+
+    /// Record that a student has acknowledged the update notification
+    /// Requirements: 14.4
+    pub fn record_acknowledgment(&self, id: &str, version: &str) {
+        if let Ok(mut acks) = self.update_acknowledgments.lock() {
+            acks.insert(id.to_string(), true);
+            log::info!(
+                "[TeacherConnector] Student {} acknowledged update to version {}",
+                id,
+                version
+            );
+        }
+    }
+
+    /// Clear all acknowledgments (called when a new broadcast is sent)
+    /// Requirements: 14.4
+    pub fn clear_acknowledgments(&self) {
+        if let Ok(mut acks) = self.update_acknowledgments.lock() {
+            acks.clear();
+        }
+    }
+
+    /// Check if all connected students have acknowledged the update
+    /// Requirements: 14.4
+    pub fn all_students_acknowledged(&self) -> bool {
+        let conns = match self.connections.lock() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let acks = match self.update_acknowledgments.lock() {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+
+        // Check that all connected students have acknowledged
+        conns.keys().all(|id| acks.get(id).copied().unwrap_or(false))
+    }
+
+    /// Get the list of students who have not yet acknowledged
+    /// Requirements: 14.4
+    pub fn get_pending_acknowledgments(&self) -> Vec<String> {
+        let conns = match self.connections.lock() {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let acks = match self.update_acknowledgments.lock() {
+            Ok(a) => a,
+            Err(_) => return Vec::new(),
+        };
+
+        conns
+            .keys()
+            .filter(|id| !acks.get(*id).copied().unwrap_or(false))
+            .cloned()
+            .collect()
+    }
+
+    /// Get update status for all connected students
+    /// Requirements: 10.5, 10.6
+    pub fn get_all_client_update_status(&self) -> Vec<ClientUpdateStatus> {
+        let conns = match self.connections.lock() {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+
+        let current_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        conns
+            .values()
+            .map(|conn| {
+                let status = conn.update_status.clone().unwrap_or(ClientUpdateState::UpToDate);
+                let progress = match &status {
+                    ClientUpdateState::Downloading { progress } => Some(*progress),
+                    _ => None,
+                };
+
+                ClientUpdateStatus {
+                    client_id: conn.id.clone(),
+                    machine_name: conn.machine_name.clone(),
+                    ip: conn.ip.clone(),
+                    current_version: conn.current_version.clone(),
+                    status,
+                    progress,
+                    last_updated: current_timestamp,
+                }
+            })
+            .collect()
     }
 
     pub fn remove_connection(&self, id: &str) {
@@ -305,6 +549,9 @@ pub async fn connect_to_student(
         port,
         name: None,
         status: ConnectionStatus::Connecting,
+        current_version: None,
+        machine_name: None,
+        update_status: None,
     };
 
     // Store connection
@@ -435,12 +682,65 @@ async fn handle_connection(
     let welcome: StudentMessage =
         serde_json::from_str(&welcome_text).map_err(|e| format!("Invalid welcome: {}", e))?;
 
-    let student_name = match welcome {
-        StudentMessage::Welcome { student_name } => student_name,
+    let (student_name, student_version, machine_name) = match welcome {
+        StudentMessage::Welcome { student_name, current_version, machine_name } => {
+            (student_name, current_version, machine_name)
+        }
         _ => return Err("Expected welcome message".to_string()),
     };
 
     state.update_name(&id, student_name.clone());
+    
+    // Update student version info if provided
+    // Requirements: 10.5 - Track student versions in connection state
+    if let Some(ref version) = student_version {
+        state.update_student_version(&id, version.clone(), machine_name.clone());
+        log::info!(
+            "[TeacherConnector] Student {} version: {}, machine: {:?}",
+            student_name,
+            version,
+            machine_name
+        );
+    }
+
+    // Perform version handshake
+    // Requirements: 5.2, 5.3 - Check student version and send required_version
+    let teacher_version = state.get_current_version();
+    let mandatory_update = student_version
+        .as_ref()
+        .map(|v| v != &teacher_version)
+        .unwrap_or(false);
+
+    // Determine update status
+    let update_status = if mandatory_update {
+        ClientUpdateState::UpdateRequired
+    } else {
+        ClientUpdateState::UpToDate
+    };
+    state.update_student_update_status(&id, update_status);
+
+    // Send version handshake response
+    let handshake_response = TeacherMessage::VersionHandshakeResponse {
+        required_version: teacher_version.clone(),
+        mandatory_update,
+        update_url: state.get_lan_update_url(),
+        sha256: state.get_update_sha256(),
+    };
+
+    let handshake_json = serde_json::to_string(&handshake_response)
+        .map_err(|e| format!("Failed to serialize handshake: {}", e))?;
+    write
+        .send(Message::Text(handshake_json))
+        .await
+        .map_err(|e| format!("Failed to send handshake: {}", e))?;
+
+    log::info!(
+        "[TeacherConnector] Sent version handshake to {}: required={}, mandatory={}",
+        student_name,
+        teacher_version,
+        mandatory_update
+    );
+
     state.update_status(&id, ConnectionStatus::Connected);
 
     println!("[TeacherConnector] Connected to student: {}", student_name);
@@ -829,8 +1129,46 @@ async fn handle_student_message(
         StudentMessage::FileReceived { file_name, success, message } => {
             log::info!("[TeacherConnector] File received response: {} - {} - {}", file_name, success, message);
         }
-        _ => {
-            println!("[TeacherConnector] Unexpected message: {:?}", msg);
+        StudentMessage::UpdateStatus { status, progress, error } => {
+            // Handle update status from student
+            // Requirements: 10.5, 10.6 - Track and display student update status
+            log::info!(
+                "[TeacherConnector] Update status from {}: status={}, progress={:?}, error={:?}",
+                id,
+                status,
+                progress,
+                error
+            );
+
+            let update_state = match status.as_str() {
+                "update_required" => ClientUpdateState::UpdateRequired,
+                "downloading" => ClientUpdateState::Downloading {
+                    progress: progress.unwrap_or(0.0),
+                },
+                "verifying" => ClientUpdateState::Verifying,
+                "installing" => ClientUpdateState::Installing,
+                "completed" => ClientUpdateState::UpToDate,
+                "failed" => ClientUpdateState::Failed {
+                    error: error.unwrap_or_else(|| "Unknown error".to_string()),
+                },
+                _ => ClientUpdateState::UpdateRequired,
+            };
+
+            state.update_student_update_status(id, update_state);
+        }
+        StudentMessage::Welcome { .. } => {
+            // Welcome message is handled during connection setup
+            log::debug!("[TeacherConnector] Received welcome message (already processed)");
+        }
+        StudentMessage::UpdateAcknowledged { version } => {
+            // Handle update acknowledgment from student
+            // Requirements: 14.4 - Track which Students have acknowledged the update notification
+            log::info!(
+                "[TeacherConnector] Student {} acknowledged update to version {}",
+                id,
+                version
+            );
+            state.record_acknowledgment(id, &version);
         }
     }
 
@@ -1080,6 +1418,163 @@ pub fn send_logout(state: &ConnectorState, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Broadcast result for tracking which students received the message
+/// Requirements: 14.1, 14.4
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct BroadcastResult {
+    /// Total number of connected students
+    pub total_students: usize,
+    /// Number of students who received the message
+    pub sent_count: usize,
+    /// IDs of students who failed to receive the message
+    pub failed_ids: Vec<String>,
+}
+
+/// Broadcast update_required message to all connected students
+/// Requirements: 14.1, 14.2, 14.4
+///
+/// This function sends an update_required message to all connected students,
+/// including the required_version and download endpoint URL.
+/// It also clears previous acknowledgments and tracks which students received the message.
+pub fn broadcast_update_required(
+    state: &ConnectorState,
+    required_version: String,
+    update_url: String,
+    sha256: Option<String>,
+) -> Result<BroadcastResult, String> {
+    // Clear previous acknowledgments before broadcasting
+    state.clear_acknowledgments();
+
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+    let connections = state.connections.lock().map_err(|e| e.to_string())?;
+
+    let total_students = connections.len();
+    let mut sent_count = 0;
+    let mut failed_ids = Vec::new();
+
+    // Create the broadcast message
+    let msg = TeacherMessage::UpdateRequired {
+        required_version: required_version.clone(),
+        update_url: update_url.clone(),
+        sha256: sha256.clone(),
+    };
+
+    log::info!(
+        "[TeacherConnector] Broadcasting update_required to {} students: version={}, url={}",
+        total_students,
+        required_version,
+        update_url
+    );
+
+    // Send to all connected students
+    for (id, _conn) in connections.iter() {
+        if let Some(sender) = senders.get(id) {
+            match sender.try_send(ConnectionCommand::SendTeacherMessage(msg.clone())) {
+                Ok(_) => {
+                    sent_count += 1;
+                    log::debug!("[TeacherConnector] Sent update_required to {}", id);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[TeacherConnector] Failed to send update_required to {}: {}",
+                        id,
+                        e
+                    );
+                    failed_ids.push(id.clone());
+                }
+            }
+        } else {
+            log::warn!(
+                "[TeacherConnector] No command sender found for student {}",
+                id
+            );
+            failed_ids.push(id.clone());
+        }
+    }
+
+    // Update the LAN distribution info in state
+    state.set_lan_distribution(Some(update_url), sha256);
+
+    // Update all students' update status to UpdateRequired
+    drop(connections); // Release the lock before calling update_student_update_status
+    drop(senders);
+
+    if let Ok(conns) = state.connections.lock() {
+        for id in conns.keys() {
+            // We need to drop the lock before calling update_student_update_status
+            let id_clone = id.clone();
+            drop(conns);
+            state.update_student_update_status(&id_clone, ClientUpdateState::UpdateRequired);
+            // Re-acquire the lock for the next iteration
+            break; // We'll handle this differently
+        }
+    }
+
+    // Update all students' update status
+    let student_ids: Vec<String> = state
+        .connections
+        .lock()
+        .map(|c| c.keys().cloned().collect())
+        .unwrap_or_default();
+
+    for id in student_ids {
+        state.update_student_update_status(&id, ClientUpdateState::UpdateRequired);
+    }
+
+    log::info!(
+        "[TeacherConnector] Broadcast complete: {}/{} students notified",
+        sent_count,
+        total_students
+    );
+
+    Ok(BroadcastResult {
+        total_students,
+        sent_count,
+        failed_ids,
+    })
+}
+
+/// Send update_required to a specific student
+/// Requirements: 14.1, 14.2
+///
+/// This is useful for sending the update notification to a newly connected student
+/// after the initial broadcast has already been sent.
+pub fn send_update_required(
+    state: &ConnectorState,
+    id: &str,
+    required_version: String,
+    update_url: String,
+    sha256: Option<String>,
+) -> Result<(), String> {
+    let senders = state.command_senders.lock().map_err(|e| e.to_string())?;
+
+    if let Some(sender) = senders.get(id) {
+        let msg = TeacherMessage::UpdateRequired {
+            required_version: required_version.clone(),
+            update_url,
+            sha256,
+        };
+
+        sender
+            .try_send(ConnectionCommand::SendTeacherMessage(msg))
+            .map_err(|e| format!("Failed to send update_required: {}", e))?;
+
+        log::info!(
+            "[TeacherConnector] Sent update_required to {}: version={}",
+            id,
+            required_version
+        );
+
+        // Update the student's update status
+        drop(senders);
+        state.update_student_update_status(id, ClientUpdateState::UpdateRequired);
+    } else {
+        return Err("Connection not found".to_string());
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1094,6 +1589,9 @@ mod tests {
             port: 3017,
             name: None,
             status: ConnectionStatus::Disconnected,
+            current_version: Some("1.0.0".to_string()),
+            machine_name: Some("TestPC".to_string()),
+            update_status: None,
         };
 
         state
@@ -1115,6 +1613,215 @@ mod tests {
 
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("shutdown"));
+    }
+
+    #[test]
+    fn test_version_handshake_response() {
+        let msg = TeacherMessage::VersionHandshakeResponse {
+            required_version: "1.1.0".to_string(),
+            mandatory_update: true,
+            update_url: Some("http://localhost:9280/update".to_string()),
+            sha256: Some("abc123".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("version_handshake_response"));
+        assert!(json.contains("1.1.0"));
+    }
+
+    #[test]
+    fn test_student_version_tracking() {
+        let state = ConnectorState::new();
+
+        let conn = StudentConnection {
+            id: "test".to_string(),
+            ip: "192.168.1.1".to_string(),
+            port: 3017,
+            name: Some("Student1".to_string()),
+            status: ConnectionStatus::Connected,
+            current_version: None,
+            machine_name: None,
+            update_status: None,
+        };
+
+        state
+            .connections
+            .lock()
+            .unwrap()
+            .insert("test".to_string(), conn);
+
+        // Update version info
+        state.update_student_version("test", "1.0.0".to_string(), Some("Lab-PC-01".to_string()));
+
+        let retrieved = state.get_connection("test").unwrap();
+        assert_eq!(retrieved.current_version, Some("1.0.0".to_string()));
+        assert_eq!(retrieved.machine_name, Some("Lab-PC-01".to_string()));
+    }
+
+    #[test]
+    fn test_update_status_tracking() {
+        let state = ConnectorState::new();
+
+        let conn = StudentConnection {
+            id: "test".to_string(),
+            ip: "192.168.1.1".to_string(),
+            port: 3017,
+            name: Some("Student1".to_string()),
+            status: ConnectionStatus::Connected,
+            current_version: Some("1.0.0".to_string()),
+            machine_name: None,
+            update_status: None,
+        };
+
+        state
+            .connections
+            .lock()
+            .unwrap()
+            .insert("test".to_string(), conn);
+
+        // Update status
+        state.update_student_update_status("test", ClientUpdateState::Downloading { progress: 50.0 });
+
+        let retrieved = state.get_connection("test").unwrap();
+        assert!(matches!(
+            retrieved.update_status,
+            Some(ClientUpdateState::Downloading { progress: _ })
+        ));
+    }
+
+    #[test]
+    fn test_all_students_up_to_date() {
+        let state = ConnectorState::new();
+
+        // No connections - should return true
+        assert!(state.all_students_up_to_date());
+
+        // Add a student that's up to date
+        let conn = StudentConnection {
+            id: "test".to_string(),
+            ip: "192.168.1.1".to_string(),
+            port: 3017,
+            name: Some("Student1".to_string()),
+            status: ConnectionStatus::Connected,
+            current_version: Some("1.0.0".to_string()),
+            machine_name: None,
+            update_status: Some(ClientUpdateState::UpToDate),
+        };
+
+        state
+            .connections
+            .lock()
+            .unwrap()
+            .insert("test".to_string(), conn);
+
+        assert!(state.all_students_up_to_date());
+
+        // Change to update required
+        state.update_student_update_status("test", ClientUpdateState::UpdateRequired);
+        assert!(!state.all_students_up_to_date());
+    }
+
+    #[test]
+    fn test_update_required_message_serialization() {
+        let msg = TeacherMessage::UpdateRequired {
+            required_version: "1.2.0".to_string(),
+            update_url: "http://192.168.1.100:9280/update".to_string(),
+            sha256: Some("abc123def456".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("update_required"));
+        assert!(json.contains("1.2.0"));
+        assert!(json.contains("http://192.168.1.100:9280/update"));
+        assert!(json.contains("abc123def456"));
+    }
+
+    #[test]
+    fn test_update_acknowledged_message_deserialization() {
+        let json = r#"{"type":"update_acknowledged","version":"1.2.0"}"#;
+        let msg: StudentMessage = serde_json::from_str(json).unwrap();
+
+        match msg {
+            StudentMessage::UpdateAcknowledged { version } => {
+                assert_eq!(version, "1.2.0");
+            }
+            _ => panic!("Expected UpdateAcknowledged message"),
+        }
+    }
+
+    #[test]
+    fn test_acknowledgment_tracking() {
+        let state = ConnectorState::new();
+
+        // Add two students
+        let conn1 = StudentConnection {
+            id: "student1".to_string(),
+            ip: "192.168.1.1".to_string(),
+            port: 3017,
+            name: Some("Student1".to_string()),
+            status: ConnectionStatus::Connected,
+            current_version: Some("1.0.0".to_string()),
+            machine_name: None,
+            update_status: Some(ClientUpdateState::UpdateRequired),
+        };
+
+        let conn2 = StudentConnection {
+            id: "student2".to_string(),
+            ip: "192.168.1.2".to_string(),
+            port: 3017,
+            name: Some("Student2".to_string()),
+            status: ConnectionStatus::Connected,
+            current_version: Some("1.0.0".to_string()),
+            machine_name: None,
+            update_status: Some(ClientUpdateState::UpdateRequired),
+        };
+
+        state
+            .connections
+            .lock()
+            .unwrap()
+            .insert("student1".to_string(), conn1);
+        state
+            .connections
+            .lock()
+            .unwrap()
+            .insert("student2".to_string(), conn2);
+
+        // Initially no acknowledgments
+        assert!(!state.all_students_acknowledged());
+        assert_eq!(state.get_pending_acknowledgments().len(), 2);
+
+        // First student acknowledges
+        state.record_acknowledgment("student1", "1.2.0");
+        assert!(!state.all_students_acknowledged());
+        assert_eq!(state.get_pending_acknowledgments().len(), 1);
+        assert!(state.get_pending_acknowledgments().contains(&"student2".to_string()));
+
+        // Second student acknowledges
+        state.record_acknowledgment("student2", "1.2.0");
+        assert!(state.all_students_acknowledged());
+        assert_eq!(state.get_pending_acknowledgments().len(), 0);
+
+        // Clear acknowledgments
+        state.clear_acknowledgments();
+        assert!(!state.all_students_acknowledged());
+        assert_eq!(state.get_pending_acknowledgments().len(), 2);
+    }
+
+    #[test]
+    fn test_broadcast_result_serialization() {
+        let result = BroadcastResult {
+            total_students: 5,
+            sent_count: 4,
+            failed_ids: vec!["student3".to_string()],
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("total_students"));
+        assert!(json.contains("5"));
+        assert!(json.contains("sent_count"));
+        assert!(json.contains("4"));
+        assert!(json.contains("student3"));
     }
 }
 

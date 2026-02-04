@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod audio_capture;
+mod auto_update;
 mod crypto;
 mod database;
 mod document_distribution;
@@ -857,6 +858,9 @@ fn connect_to_student(
         port,
         name: None,
         status: teacher_connector::ConnectionStatus::Connecting,
+        current_version: None,
+        machine_name: None,
+        update_status: None,
     };
 
     // Store connection
@@ -1322,6 +1326,204 @@ async fn download_document_to_downloads(
     Ok(file_path.to_string_lossy().to_string())
 }
 
+// ============================================================
+// Auto-Update Commands
+// ============================================================
+
+/// Check for updates from the Update API
+/// Requirements: 2.1
+#[tauri::command]
+async fn check_for_updates(
+    app: AppHandle,
+    state: State<'_, Arc<auto_update::UpdateCoordinator>>,
+) -> Result<Option<auto_update::UpdateInfo>, String> {
+    state
+        .check_for_updates(Some(&app))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Download the update package
+/// Requirements: 3.1
+#[tauri::command]
+async fn download_update(
+    app: AppHandle,
+    state: State<'_, Arc<auto_update::UpdateCoordinator>>,
+) -> Result<String, String> {
+    state
+        .download_update(app)
+        .await
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Get the current update state
+#[tauri::command]
+fn get_update_state(
+    state: State<Arc<auto_update::UpdateCoordinator>>,
+) -> auto_update::UpdateState {
+    state.get_state()
+}
+
+/// Install the verified update
+/// Requirements: 4.1
+#[tauri::command]
+fn install_update(
+    app: AppHandle,
+    state: State<Arc<auto_update::UpdateCoordinator>>,
+) -> Result<(), String> {
+    state.install_update(Some(&app)).map_err(|e| e.to_string())
+}
+
+/// Restart the application for update
+/// Requirements: 4.3
+#[tauri::command]
+fn restart_for_update(
+    app: AppHandle,
+    state: State<Arc<auto_update::UpdateCoordinator>>,
+) -> Result<(), String> {
+    state.restart_app(Some(&app)).map_err(|e| e.to_string())
+}
+
+/// Reset the update coordinator to idle state
+#[tauri::command]
+fn reset_update_state(
+    app: AppHandle,
+    state: State<Arc<auto_update::UpdateCoordinator>>,
+) {
+    state.reset(Some(&app));
+}
+
+/// Get update configuration
+#[tauri::command]
+fn get_update_config() -> auto_update::UpdateConfig {
+    auto_update::load_config()
+}
+
+/// Save update configuration
+#[tauri::command]
+fn save_update_config(config: auto_update::UpdateConfig) -> Result<(), String> {
+    auto_update::save_config(&config)
+}
+
+/// Get update config file path
+#[tauri::command]
+fn get_update_config_path() -> String {
+    auto_update::get_config_path().to_string_lossy().to_string()
+}
+
+// ============================================================
+// LAN Distribution Commands (Teacher only)
+// ============================================================
+
+/// Start the LAN distribution server to serve updates to students
+/// Requirements: 7.1
+#[tauri::command]
+async fn start_lan_distribution(
+    state: State<'_, Arc<auto_update::LanDistributionServer>>,
+) -> Result<String, String> {
+    // Get the download path from the coordinator
+    // For now, we'll need the package path and hash to be provided
+    // This will be called after a successful download
+    
+    // Get download URL if server is running
+    state
+        .get_download_url()
+        .await
+        .ok_or_else(|| "Server not running or not configured".to_string())
+}
+
+/// Stop the LAN distribution server
+/// Requirements: 7.5
+#[tauri::command]
+async fn stop_lan_distribution(
+    state: State<'_, Arc<auto_update::LanDistributionServer>>,
+) -> Result<(), String> {
+    state.stop().await.map_err(|e| e.to_string())
+}
+
+/// Get the status of connected students' updates
+/// Requirements: 10.5, 10.6
+#[tauri::command]
+fn get_client_update_status(
+    state: State<Arc<ConnectorState>>,
+) -> Vec<teacher_connector::ClientUpdateStatus> {
+    state.get_all_client_update_status()
+}
+
+// ============================================================
+// Student Update Commands
+// ============================================================
+
+/// Get the current student update state
+/// Requirements: 11.1, 11.2
+#[tauri::command]
+fn get_student_update_state(
+    state: State<Arc<auto_update::StudentUpdateCoordinator>>,
+) -> auto_update::StudentUpdateState {
+    state.get_state()
+}
+
+/// Download update from Teacher's LAN server
+/// Requirements: 8.1, 8.3
+#[tauri::command]
+async fn download_student_update(
+    app: AppHandle,
+    state: State<'_, Arc<auto_update::StudentUpdateCoordinator>>,
+) -> Result<String, String> {
+    state
+        .download_with_retry(app)
+        .await
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Retry student update download after failure
+/// Requirements: 8.5, 11.4
+#[tauri::command]
+async fn retry_student_update(
+    app: AppHandle,
+    state: State<'_, Arc<auto_update::StudentUpdateCoordinator>>,
+) -> Result<String, String> {
+    state
+        .retry_download(app)
+        .await
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Install the student update
+/// Requirements: 9.1
+#[tauri::command]
+async fn install_student_update(
+    app: AppHandle,
+    state: State<'_, Arc<auto_update::StudentUpdateCoordinator>>,
+) -> Result<(), String> {
+    // Get the download path
+    let download_path = state
+        .start_install(Some(&app))
+        .map_err(|e| e.to_string())?;
+
+    // Detect installer type
+    let installer_type = auto_update::InstallerRunner::detect_installer_type(&download_path)
+        .map_err(|e| e.to_string())?;
+
+    // Run the installer
+    auto_update::InstallerRunner::run_silent(&download_path, installer_type)
+        .map_err(|e| e.to_string())?;
+
+    // Mark as restarting
+    state.start_restart(Some(&app)).map_err(|e| e.to_string())?;
+
+    // Schedule restart
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        let _ = auto_update::InstallerRunner::restart_app();
+    });
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1341,6 +1543,13 @@ pub fn run() {
         .manage(Arc::new(ConnectorState::default()))
         .manage(Arc::new(FileTransferState::default()))
         .manage(Arc::new(DocumentServerState::default()))
+        .manage(Arc::new(auto_update::UpdateCoordinator::with_defaults(
+            env!("CARGO_PKG_VERSION").to_string()
+        )))
+        .manage(Arc::new(auto_update::LanDistributionServer::new(9280)))
+        .manage(Arc::new(auto_update::StudentUpdateCoordinator::new(
+            env!("CARGO_PKG_VERSION").to_string()
+        )))
         .invoke_handler(tauri::generate_handler![
             start_server,
             stop_server,
@@ -1421,7 +1630,26 @@ pub fn run() {
             upload_document_from_path,
             delete_document,
             list_documents,
-            get_document
+            get_document,
+            // Auto-Update commands
+            check_for_updates,
+            download_update,
+            get_update_state,
+            install_update,
+            restart_for_update,
+            reset_update_state,
+            get_update_config,
+            save_update_config,
+            get_update_config_path,
+            // LAN Distribution commands
+            start_lan_distribution,
+            stop_lan_distribution,
+            get_client_update_status,
+            // Student Update commands
+            get_student_update_state,
+            download_student_update,
+            retry_student_update,
+            install_student_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

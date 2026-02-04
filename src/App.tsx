@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { 
   LayoutDashboard, Users, Monitor, Calendar, 
   MessageSquare, FileText, LogOut, 
   Bell, 
-  MonitorPlay, Menu, Database, Loader2, AlertCircle, Wifi, WifiOff
+  MonitorPlay, Menu, Database, Loader2, AlertCircle, Wifi, WifiOff, Download, X
 } from 'lucide-react';
 import Dashboard from './views/Dashboard';
 import LabControl from './views/LabControl';
@@ -14,11 +15,20 @@ import OnlineClassroom from './views/OnlineClassroom';
 import DocumentManager from './views/DocumentManager';
 import Messaging from './views/Messaging';
 import SystemConfig from './views/SystemConfig';
+import UpdatesPage from './views/UpdatesPage';
+import UpdateRequiredScreen from './components/UpdateRequiredScreen';
 import { ScreenSharingPage } from './pages/ScreenSharingPage';
 import { ViewClientPage } from './pages/ViewClientPage';
 import { FileTransferPage } from './pages/FileTransferPage';
 import { UserAccount as User, UserRole } from './types';
 import './App.css';
+
+// Update info type for notifications
+interface UpdateInfo {
+  version: string;
+  published_at: string;
+  release_notes: string;
+}
 
 // Backend response types
 interface LoginResponse {
@@ -68,6 +78,15 @@ const App: React.FC = () => {
   // Document Server state (for Teacher)
   const [docServerUrl, setDocServerUrl] = useState<string>('');
   const docServerStarted = useRef(false);
+
+  // Student Update state
+  const [updateRequired, setUpdateRequired] = useState<boolean>(false);
+  const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
+
+  // Teacher Update notification state (Requirements: 2.1)
+  const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(null);
+  const [showUpdateNotification, setShowUpdateNotification] = useState<boolean>(false);
+  const updateCheckDone = useRef(false);
 
   // Initialize database on app start
   useEffect(() => {
@@ -165,6 +184,41 @@ const App: React.FC = () => {
     };
   }, [currentUser]);
 
+  // Check for updates on startup for Teacher/Admin role (Requirements: 2.1)
+  useEffect(() => {
+    if (!currentUser || (currentUser.role !== UserRole.TEACHER && currentUser.role !== UserRole.ADMIN) || updateCheckDone.current) {
+      return;
+    }
+
+    const checkForUpdates = async () => {
+      try {
+        console.log('[AutoUpdate] Checking for updates on startup...');
+        const info = await invoke<UpdateInfo | null>('check_for_updates');
+        
+        if (info) {
+          console.log('[AutoUpdate] Update available:', info.version);
+          setUpdateAvailable(info);
+          setShowUpdateNotification(true);
+        } else {
+          console.log('[AutoUpdate] No updates available');
+        }
+        
+        updateCheckDone.current = true;
+      } catch (error) {
+        console.error('[AutoUpdate] Failed to check for updates:', error);
+        // Don't show error to user - update check is non-critical
+        updateCheckDone.current = true;
+      }
+    };
+
+    // Delay update check to not interfere with app startup
+    const timeoutId = setTimeout(checkForUpdates, 2000);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [currentUser]);
+
   // Poll agent status for Student role
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.STUDENT) {
@@ -217,6 +271,64 @@ const App: React.FC = () => {
     pollStatus();
     const interval = setInterval(pollStatus, 1000);
     return () => clearInterval(interval);
+  }, [currentUser]);
+
+  // Check for student update requirements
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== UserRole.STUDENT) {
+      return;
+    }
+
+    // Check initial update state
+    const checkUpdateState = async () => {
+      try {
+        setCheckingUpdate(true);
+        const state = await invoke<any>('get_student_update_state');
+        console.log('[App] Student update state:', state);
+        
+        // Check if update is required
+        const requiresUpdate = state.type === 'UpdateRequired' || 
+                              state.type === 'Downloading' || 
+                              state.type === 'Verifying' || 
+                              state.type === 'ReadyToInstall' || 
+                              state.type === 'Installing' ||
+                              state.type === 'Restarting' ||
+                              state.type === 'Failed';
+        
+        setUpdateRequired(requiresUpdate);
+      } catch (error) {
+        console.error('[App] Failed to check update state:', error);
+      } finally {
+        setCheckingUpdate(false);
+      }
+    };
+
+    checkUpdateState();
+
+    // Listen for update state changes
+    const unlisten = listen<{ state: any; timestamp: number }>('student-update-state-changed', (event) => {
+      console.log('[App] Student update state changed:', event.payload);
+      const state = event.payload.state;
+      
+      const requiresUpdate = state.type === 'UpdateRequired' || 
+                            state.type === 'Downloading' || 
+                            state.type === 'Verifying' || 
+                            state.type === 'ReadyToInstall' || 
+                            state.type === 'Installing' ||
+                            state.type === 'Restarting' ||
+                            state.type === 'Failed';
+      
+      setUpdateRequired(requiresUpdate);
+      
+      // If update is done, clear the flag
+      if (state.type === 'Done' || state.type === 'Idle') {
+        setUpdateRequired(false);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
   }, [currentUser]);
 
   // Convert backend role string to UserRole enum
@@ -304,6 +416,12 @@ const App: React.FC = () => {
 
   if (subPage === 'file-transfer') {
     return <FileTransferPage onBack={handleBackFromSubPage} />;
+  }
+
+  // Show update required screen for students when update is needed
+  // Requirements: 6.1, 6.2 - Block main functionality when update required
+  if (currentUser?.role === UserRole.STUDENT && updateRequired && !checkingUpdate) {
+    return <UpdateRequiredScreen onUpdateComplete={() => setUpdateRequired(false)} />;
   }
 
   if (isLoginView) {
@@ -410,6 +528,7 @@ const App: React.FC = () => {
     { id: 'classroom', label: 'Hỗ trợ giảng dạy', icon: MonitorPlay, roles: [UserRole.TEACHER, UserRole.STUDENT] },
     { id: 'messaging', label: 'Hệ thống nhắn tin', icon: MessageSquare, roles: [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT] },
     { id: 'documents', label: 'Phân phối tài liệu', icon: FileText, roles: [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT] },
+    { id: 'updates', label: 'Cập nhật hệ thống', icon: Download, roles: [UserRole.ADMIN, UserRole.TEACHER] },
   ];
 
   const filteredMenuItems = menuItems.filter(item => item.roles.includes(currentUser!.role));
@@ -486,6 +605,50 @@ const App: React.FC = () => {
               <Bell className="w-6 h-6 group-hover:rotate-12 transition-transform" />
               <span className="absolute top-2.5 right-2.5 w-3 h-3 bg-rose-500 rounded-full border-2 border-white"></span>
             </button>
+
+            {/* Update Available Notification (Requirements: 2.1, 2.4) */}
+            {showUpdateNotification && updateAvailable && (currentUser?.role === UserRole.TEACHER || currentUser?.role === UserRole.ADMIN) && (
+              <div className="fixed top-28 right-12 z-50 animate-in slide-in-from-right duration-300">
+                <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 max-w-sm">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 bg-indigo-100 rounded-xl flex-shrink-0">
+                      <Download className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-sm font-bold text-slate-800">Có bản cập nhật mới!</h3>
+                        <button
+                          onClick={() => setShowUpdateNotification(false)}
+                          className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                        >
+                          <X className="w-4 h-4 text-slate-400" />
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Phiên bản {updateAvailable.version} đã sẵn sàng
+                      </p>
+                      <div className="flex items-center gap-2 mt-3">
+                        <button
+                          onClick={() => {
+                            setActiveTab('updates');
+                            setShowUpdateNotification(false);
+                          }}
+                          className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors"
+                        >
+                          Xem chi tiết
+                        </button>
+                        <button
+                          onClick={() => setShowUpdateNotification(false)}
+                          className="px-3 py-1.5 text-slate-500 text-xs font-bold hover:text-slate-700 transition-colors"
+                        >
+                          Để sau
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="flex items-center gap-5 pl-8 border-l border-slate-200">
               <div className="text-right">
                 <p className="text-sm font-black text-slate-800 leading-none">{currentUser?.userName}</p>
@@ -510,6 +673,7 @@ const App: React.FC = () => {
             )}
             {activeTab === 'documents' && <DocumentManager user={currentUser!} teacherIp={teacherIp} />}
             {activeTab === 'messaging' && <Messaging user={currentUser!} />}
+            {activeTab === 'updates' && <UpdatesPage />}
           </div>
         </div>
       </main>
