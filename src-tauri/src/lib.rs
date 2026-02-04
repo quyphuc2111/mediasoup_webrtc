@@ -1412,6 +1412,14 @@ fn get_update_config_path() -> String {
     auto_update::get_config_path().to_string_lossy().to_string()
 }
 
+/// Get the downloaded update package path
+#[tauri::command]
+fn get_update_download_path(
+    state: State<Arc<auto_update::UpdateCoordinator>>,
+) -> Option<String> {
+    state.get_download_path().map(|p| p.to_string_lossy().to_string())
+}
+
 // ============================================================
 // LAN Distribution Commands (Teacher only)
 // ============================================================
@@ -1730,6 +1738,7 @@ pub fn run() {
             get_update_config,
             save_update_config,
             get_update_config_path,
+            get_update_download_path,
             // LAN Distribution commands
             start_lan_distribution,
             stop_lan_distribution,

@@ -180,21 +180,17 @@ const UpdatesPage: React.FC = () => {
 
     setIsStartingLan(true);
     try {
-      // Get the download path from the update state
-      const state = await invoke<UpdateState>('get_update_state');
-      if (state.type !== 'ReadyToInstall') {
+      // Get the download path from the coordinator
+      const downloadPath = await invoke<string | null>('get_update_download_path');
+      
+      if (!downloadPath) {
         alert('Please download the update first before starting LAN distribution.');
+        setIsStartingLan(false);
         return;
       }
 
-      // Get the downloaded package path from config
-      const configPath = await invoke<string>('get_update_config_path');
-      // The package is typically in the same directory as config
-      const packageDir = configPath.replace(/[^/\\]+$/, '');
-      const packagePath = `${packageDir}updates/${updateInfo.download_url.split('/').pop()}`;
-
       const url = await invoke<string>('start_lan_distribution', {
-        packagePath,
+        packagePath: downloadPath,
         sha256: updateInfo.sha256,
       });
       setLanServerUrl(url);
