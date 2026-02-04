@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import ReactMarkdown from 'react-markdown';
 import {
   Download,
@@ -52,12 +53,17 @@ interface ClientUpdateStatus {
 }
 
 const UpdatesPage: React.FC = () => {
-  const [currentVersion] = useState(import.meta.env.VITE_APP_VERSION || '0.1.0');
+  const [currentVersion, setCurrentVersion] = useState('...');
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>({ type: 'Idle' });
   const [isChecking, setIsChecking] = useState(false);
   const [clientStatuses, setClientStatuses] = useState<ClientUpdateStatus[]>([]);
   const [showChangelog, setShowChangelog] = useState(false);
+
+  // Get app version from Tauri
+  useEffect(() => {
+    getVersion().then(setCurrentVersion).catch(() => setCurrentVersion('unknown'));
+  }, []);
 
   // Poll update state
   useEffect(() => {
