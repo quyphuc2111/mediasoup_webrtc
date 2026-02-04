@@ -249,6 +249,7 @@ impl UpdateCoordinator {
             UpdateState::Idle 
                 | UpdateState::Failed { .. }
                 | UpdateState::UpdateAvailable { .. }
+                | UpdateState::ReadyToInstall  // Allow re-checking when ready to install
                 | UpdateState::Done
         ) {
             return Err(UpdateError::InvalidState {

@@ -71,6 +71,7 @@ const UpdatesPage: React.FC = () => {
   
   // LAN Distribution state
   const [lanServerUrl, setLanServerUrl] = useState<string | null>(null);
+  const [lanUpdateInfo, setLanUpdateInfo] = useState<UpdateInfo | null>(null); // Store update info when LAN server starts
   const [isStartingLan, setIsStartingLan] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<BroadcastResult | null>(null);
@@ -173,8 +174,23 @@ const UpdatesPage: React.FC = () => {
 
   // Start LAN distribution server
   const handleStartLanServer = async () => {
-    if (!updateInfo) {
-      alert('Please check for updates first to get the package information.');
+    // Try to get updateInfo from state, or fetch from backend
+    let info = updateInfo;
+    
+    if (!info) {
+      // Try to get latest info from backend coordinator
+      try {
+        info = await invoke<UpdateInfo | null>('get_latest_update_info');
+        if (info) {
+          setUpdateInfo(info);
+        }
+      } catch (error) {
+        console.error('Failed to get update info:', error);
+      }
+    }
+    
+    if (!info) {
+      alert('Vui lòng kiểm tra cập nhật trước để lấy thông tin package.\n\nClick "Check Now" để kiểm tra.');
       return;
     }
 
@@ -182,22 +198,25 @@ const UpdatesPage: React.FC = () => {
     try {
       // Get the download path from the coordinator
       const downloadPath = await invoke<string | null>('get_update_download_path');
+      console.log('[UpdatesPage] Download path from coordinator:', downloadPath);
       
       if (!downloadPath) {
-        alert('Please download the update first before starting LAN distribution.');
+        alert('Vui lòng tải xuống bản cập nhật trước khi khởi động LAN server.\n\nBản cập nhật phải được tải về máy Teacher trước khi có thể phân phối cho học sinh.');
         setIsStartingLan(false);
         return;
       }
 
+      console.log('[UpdatesPage] Starting LAN server with path:', downloadPath);
       const url = await invoke<string>('start_lan_distribution', {
         packagePath: downloadPath,
-        sha256: updateInfo.sha256,
+        sha256: info.sha256,
       });
       setLanServerUrl(url);
-      console.log('LAN server started:', url);
+      setLanUpdateInfo(info); // Save update info for broadcast
+      console.log('[UpdatesPage] LAN server started:', url);
     } catch (error) {
       console.error('Failed to start LAN server:', error);
-      alert(`Failed to start LAN server: ${error}`);
+      alert(`Không thể khởi động LAN server: ${error}`);
     } finally {
       setIsStartingLan(false);
     }
@@ -208,6 +227,7 @@ const UpdatesPage: React.FC = () => {
     try {
       await invoke('stop_lan_distribution');
       setLanServerUrl(null);
+      setLanUpdateInfo(null);
       setBroadcastResult(null);
     } catch (error) {
       console.error('Failed to stop LAN server:', error);
@@ -216,23 +236,35 @@ const UpdatesPage: React.FC = () => {
 
   // Broadcast update to all students
   const handleBroadcastUpdate = async () => {
-    if (!lanServerUrl || !updateInfo) {
-      alert('Please start the LAN server first.');
+    // Use lanUpdateInfo (saved when LAN server started) or current updateInfo
+    const infoToUse = lanUpdateInfo || updateInfo;
+    
+    if (!lanServerUrl) {
+      alert('Vui lòng khởi động LAN server trước.');
+      return;
+    }
+    
+    if (!infoToUse) {
+      alert('Không có thông tin bản cập nhật. Vui lòng kiểm tra cập nhật và khởi động lại LAN server.');
       return;
     }
 
     setIsBroadcasting(true);
     try {
       const result = await invoke<BroadcastResult>('broadcast_update_to_students', {
-        requiredVersion: updateInfo.version,
+        requiredVersion: infoToUse.version,
         updateUrl: lanServerUrl,
-        sha256: updateInfo.sha256,
+        sha256: infoToUse.sha256,
       });
       setBroadcastResult(result);
       console.log('Broadcast result:', result);
+      
+      if (result.total_students === 0) {
+        alert('Không có học sinh nào đang kết nối. Vui lòng đảm bảo học sinh đã kết nối trước khi broadcast.');
+      }
     } catch (error) {
       console.error('Failed to broadcast update:', error);
-      alert(`Failed to broadcast update: ${error}`);
+      alert(`Không thể broadcast cập nhật: ${error}`);
     } finally {
       setIsBroadcasting(false);
     }

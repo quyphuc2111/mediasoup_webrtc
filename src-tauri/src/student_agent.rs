@@ -35,6 +35,7 @@ pub enum AgentStatus {
         current_version: String,
         required_version: String,
         update_url: Option<String>,
+        sha256: Option<String>,
     },
     /// Update is being downloaded
     Updating {
@@ -727,7 +728,7 @@ where
             required_version,
             mandatory_update,
             update_url,
-            sha256: _,
+            sha256,
         } => {
             log::info!(
                 "[StudentAgent] Received version handshake response: required={}, mandatory={}",
@@ -752,12 +753,14 @@ where
                     current_version: current_version.clone(),
                     required_version: required_version.clone(),
                     update_url: update_url.clone(),
+                    sha256: sha256.clone(),
                 });
 
                 log::warn!(
-                    "[StudentAgent] Update required: {} -> {}",
+                    "[StudentAgent] Update required: {} -> {}, sha256={:?}",
                     current_version,
-                    required_version
+                    required_version,
+                    sha256
                 );
 
                 // Send update status to teacher
@@ -799,17 +802,19 @@ where
                 }
             }
 
-            // Set status to UpdateRequired
+            // Set status to UpdateRequired with sha256 for verification
             state.set_status(AgentStatus::UpdateRequired {
                 current_version: current_version.clone(),
                 required_version: required_version.clone(),
                 update_url: Some(update_url.clone()),
+                sha256: sha256.clone(),
             });
 
             log::warn!(
-                "[StudentAgent] Update required (broadcast): {} -> {}",
+                "[StudentAgent] Update required (broadcast): {} -> {}, sha256={:?}",
                 current_version,
-                required_version
+                required_version,
+                sha256
             );
 
             // Send acknowledgment to teacher
@@ -1731,6 +1736,7 @@ mod tests {
             current_version: "1.0.0".to_string(),
             required_version: "1.1.0".to_string(),
             update_url: Some("http://localhost:9280/update".to_string()),
+            sha256: None,
         });
         
         assert!(state.is_update_required());

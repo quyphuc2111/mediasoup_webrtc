@@ -219,6 +219,9 @@ const App: React.FC = () => {
     };
   }, [currentUser]);
 
+  // Track if we've already triggered update required to avoid duplicate calls
+  const updateRequiredTriggered = useRef(false);
+
   // Poll agent status for Student role
   useEffect(() => {
     if (!currentUser || currentUser.role !== UserRole.STUDENT) {
@@ -252,6 +255,36 @@ const App: React.FC = () => {
             const connected = (status as any).Connected;
             setAgentStatus(`Connected: ${connected.teacher_name}`);
             setTeacherIp(connected.teacher_ip || '');
+          }
+          else if ('UpdateRequired' in status && (status as any).UpdateRequired) {
+            // Bridge AgentStatus::UpdateRequired to StudentUpdateCoordinator
+            // This triggers the update modal to show
+            const updateInfo = (status as any).UpdateRequired;
+            console.log('[App] Agent status is UpdateRequired:', updateInfo);
+            setAgentStatus('UpdateRequired');
+            
+            // Only trigger once to avoid duplicate calls
+            if (!updateRequiredTriggered.current) {
+              updateRequiredTriggered.current = true;
+              console.log('[App] Triggering StudentUpdateCoordinator with update info...');
+              
+              try {
+                // Call set_student_update_required to trigger StudentUpdateCoordinator
+                // This will emit 'student-update-state-changed' event that UpdateRequiredScreen listens to
+                await invoke('set_student_update_required', {
+                  requiredVersion: updateInfo.required_version,
+                  updateUrl: updateInfo.update_url || null,
+                  sha256: updateInfo.sha256 || null,
+                });
+                console.log('[App] StudentUpdateCoordinator triggered successfully');
+              } catch (error) {
+                console.error('[App] Failed to trigger StudentUpdateCoordinator:', error);
+              }
+            }
+          }
+          else if ('Updating' in status && (status as any).Updating) {
+            const updating = (status as any).Updating;
+            setAgentStatus(`Updating: ${(updating.progress * 100).toFixed(0)}%`);
           }
           else if ('Error' in status && (status as any).Error) {
             setAgentStatus(`Error: ${(status as any).Error.message}`);
@@ -395,10 +428,14 @@ const App: React.FC = () => {
       }
     }
     
+    // Reset update required trigger flag
+    updateRequiredTriggered.current = false;
+    
     setCurrentUser(null);
     setIsLoginView(true);
     setSubPage('none');
     setAgentStatus('Stopped');
+    setUpdateRequired(false);
   };
 
   const handleBackFromSubPage = () => {

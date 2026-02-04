@@ -1417,7 +1417,19 @@ fn get_update_config_path() -> String {
 fn get_update_download_path(
     state: State<Arc<auto_update::UpdateCoordinator>>,
 ) -> Option<String> {
-    state.get_download_path().map(|p| p.to_string_lossy().to_string())
+    let path = state.get_download_path();
+    log::info!("[UpdateCoordinator] get_update_download_path: {:?}", path);
+    path.map(|p| p.to_string_lossy().to_string())
+}
+
+/// Get the latest update info from coordinator (for when frontend state is lost)
+#[tauri::command]
+fn get_latest_update_info(
+    state: State<Arc<auto_update::UpdateCoordinator>>,
+) -> Option<auto_update::UpdateInfo> {
+    let info = state.get_latest_info();
+    log::info!("[UpdateCoordinator] get_latest_update_info: {:?}", info.as_ref().map(|i| &i.version));
+    info
 }
 
 // ============================================================
@@ -1433,12 +1445,17 @@ async fn start_lan_distribution(
     state: State<'_, Arc<auto_update::LanDistributionServer>>,
     connector_state: State<'_, Arc<ConnectorState>>,
 ) -> Result<String, String> {
+    log::info!("[LanDistribution] Starting with package_path: {}", package_path);
+    
     let path = std::path::PathBuf::from(&package_path);
     
     // Verify file exists
     if !path.exists() {
+        log::error!("[LanDistribution] Package file not found: {}", package_path);
         return Err(format!("Package file not found: {}", package_path));
     }
+    
+    log::info!("[LanDistribution] Package file verified: {:?}", path);
     
     // Start the LAN server
     state
@@ -1739,6 +1756,7 @@ pub fn run() {
             save_update_config,
             get_update_config_path,
             get_update_download_path,
+            get_latest_update_info,
             // LAN Distribution commands
             start_lan_distribution,
             stop_lan_distribution,
