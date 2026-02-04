@@ -1420,17 +1420,44 @@ fn get_update_config_path() -> String {
 /// Requirements: 7.1
 #[tauri::command]
 async fn start_lan_distribution(
+    package_path: String,
+    sha256: String,
     state: State<'_, Arc<auto_update::LanDistributionServer>>,
+    connector_state: State<'_, Arc<ConnectorState>>,
 ) -> Result<String, String> {
-    // Get the download path from the coordinator
-    // For now, we'll need the package path and hash to be provided
-    // This will be called after a successful download
+    let path = std::path::PathBuf::from(&package_path);
     
-    // Get download URL if server is running
+    // Verify file exists
+    if !path.exists() {
+        return Err(format!("Package file not found: {}", package_path));
+    }
+    
+    // Start the LAN server
     state
+        .start(path, sha256.clone())
+        .await
+        .map_err(|e| e.to_string())?;
+    
+    // Get the download URL
+    let url = state
         .get_download_url()
         .await
-        .ok_or_else(|| "Server not running or not configured".to_string())
+        .ok_or_else(|| "Failed to get download URL".to_string())?;
+    
+    // Update connector state with LAN distribution info
+    connector_state.set_lan_distribution(Some(url.clone()), Some(sha256));
+    
+    log::info!("[LanDistribution] Server started, URL: {}", url);
+    
+    Ok(url)
+}
+
+/// Get the LAN distribution server URL if running
+#[tauri::command]
+async fn get_lan_distribution_url(
+    state: State<'_, Arc<auto_update::LanDistributionServer>>,
+) -> Result<Option<String>, String> {
+    Ok(state.get_download_url().await)
 }
 
 /// Stop the LAN distribution server
@@ -1438,8 +1465,57 @@ async fn start_lan_distribution(
 #[tauri::command]
 async fn stop_lan_distribution(
     state: State<'_, Arc<auto_update::LanDistributionServer>>,
+    connector_state: State<'_, Arc<ConnectorState>>,
 ) -> Result<(), String> {
+    // Clear LAN distribution info from connector state
+    connector_state.set_lan_distribution(None, None);
+    
     state.stop().await.map_err(|e| e.to_string())
+}
+
+/// Broadcast update required to all connected students
+/// Requirements: 14.1, 14.2
+#[tauri::command]
+fn broadcast_update_to_students(
+    required_version: String,
+    update_url: String,
+    sha256: Option<String>,
+    state: State<Arc<ConnectorState>>,
+) -> Result<teacher_connector::BroadcastResult, String> {
+    teacher_connector::broadcast_update_required(&state, required_version, update_url, sha256)
+}
+
+/// Send update required to a specific student
+/// Requirements: 14.1, 14.2
+#[tauri::command]
+fn send_update_to_student(
+    student_id: String,
+    required_version: String,
+    update_url: String,
+    sha256: Option<String>,
+    state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
+    teacher_connector::send_update_required(&state, &student_id, required_version, update_url, sha256)
+}
+
+/// Check if all students have acknowledged the update
+/// Requirements: 14.4
+#[tauri::command]
+fn check_update_acknowledgments(
+    state: State<Arc<ConnectorState>>,
+) -> (bool, Vec<String>) {
+    let all_acked = state.all_students_acknowledged();
+    let pending = state.get_pending_acknowledgments();
+    (all_acked, pending)
+}
+
+/// Check if all students are up to date
+/// Requirements: 14.5
+#[tauri::command]
+fn check_all_students_updated(
+    state: State<Arc<ConnectorState>>,
+) -> bool {
+    state.all_students_up_to_date()
 }
 
 /// Get the status of connected students' updates
@@ -1462,6 +1538,19 @@ fn get_student_update_state(
     state: State<Arc<auto_update::StudentUpdateCoordinator>>,
 ) -> auto_update::StudentUpdateState {
     state.get_state()
+}
+
+/// Set update required for student (called when receiving update_required from teacher)
+/// Requirements: 8.1
+#[tauri::command]
+fn set_student_update_required(
+    required_version: String,
+    update_url: Option<String>,
+    sha256: Option<String>,
+    app: AppHandle,
+    state: State<Arc<auto_update::StudentUpdateCoordinator>>,
+) {
+    state.set_update_required(required_version, update_url, sha256, Some(&app));
 }
 
 /// Download update from Teacher's LAN server
@@ -1644,9 +1733,15 @@ pub fn run() {
             // LAN Distribution commands
             start_lan_distribution,
             stop_lan_distribution,
+            get_lan_distribution_url,
             get_client_update_status,
+            broadcast_update_to_students,
+            send_update_to_student,
+            check_update_acknowledgments,
+            check_all_students_updated,
             // Student Update commands
             get_student_update_state,
+            set_student_update_required,
             download_student_update,
             retry_student_update,
             install_student_update

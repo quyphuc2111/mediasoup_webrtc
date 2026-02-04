@@ -16,6 +16,9 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  Server,
+  Send,
+  Users,
 } from 'lucide-react';
 
 // Types matching Rust backend
@@ -52,6 +55,12 @@ interface ClientUpdateStatus {
   last_updated: number;
 }
 
+interface BroadcastResult {
+  total_students: number;
+  sent_count: number;
+  failed_ids: string[];
+}
+
 const UpdatesPage: React.FC = () => {
   const [currentVersion, setCurrentVersion] = useState('...');
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -59,10 +68,29 @@ const UpdatesPage: React.FC = () => {
   const [isChecking, setIsChecking] = useState(false);
   const [clientStatuses, setClientStatuses] = useState<ClientUpdateStatus[]>([]);
   const [showChangelog, setShowChangelog] = useState(false);
+  
+  // LAN Distribution state
+  const [lanServerUrl, setLanServerUrl] = useState<string | null>(null);
+  const [isStartingLan, setIsStartingLan] = useState(false);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [broadcastResult, setBroadcastResult] = useState<BroadcastResult | null>(null);
 
   // Get app version from Tauri
   useEffect(() => {
     getVersion().then(setCurrentVersion).catch(() => setCurrentVersion('unknown'));
+  }, []);
+
+  // Check LAN server status on mount
+  useEffect(() => {
+    const checkLanServer = async () => {
+      try {
+        const url = await invoke<string | null>('get_lan_distribution_url');
+        setLanServerUrl(url);
+      } catch (error) {
+        console.error('Failed to get LAN server URL:', error);
+      }
+    };
+    checkLanServer();
   }, []);
 
   // Poll update state
@@ -141,6 +169,77 @@ const UpdatesPage: React.FC = () => {
   const handleRetry = async () => {
     // Retry by checking for updates again
     await handleCheckForUpdates();
+  };
+
+  // Start LAN distribution server
+  const handleStartLanServer = async () => {
+    if (!updateInfo) {
+      alert('Please check for updates first to get the package information.');
+      return;
+    }
+
+    setIsStartingLan(true);
+    try {
+      // Get the download path from the update state
+      const state = await invoke<UpdateState>('get_update_state');
+      if (state.type !== 'ReadyToInstall') {
+        alert('Please download the update first before starting LAN distribution.');
+        return;
+      }
+
+      // Get the downloaded package path from config
+      const configPath = await invoke<string>('get_update_config_path');
+      // The package is typically in the same directory as config
+      const packageDir = configPath.replace(/[^/\\]+$/, '');
+      const packagePath = `${packageDir}updates/${updateInfo.download_url.split('/').pop()}`;
+
+      const url = await invoke<string>('start_lan_distribution', {
+        packagePath,
+        sha256: updateInfo.sha256,
+      });
+      setLanServerUrl(url);
+      console.log('LAN server started:', url);
+    } catch (error) {
+      console.error('Failed to start LAN server:', error);
+      alert(`Failed to start LAN server: ${error}`);
+    } finally {
+      setIsStartingLan(false);
+    }
+  };
+
+  // Stop LAN distribution server
+  const handleStopLanServer = async () => {
+    try {
+      await invoke('stop_lan_distribution');
+      setLanServerUrl(null);
+      setBroadcastResult(null);
+    } catch (error) {
+      console.error('Failed to stop LAN server:', error);
+    }
+  };
+
+  // Broadcast update to all students
+  const handleBroadcastUpdate = async () => {
+    if (!lanServerUrl || !updateInfo) {
+      alert('Please start the LAN server first.');
+      return;
+    }
+
+    setIsBroadcasting(true);
+    try {
+      const result = await invoke<BroadcastResult>('broadcast_update_to_students', {
+        requiredVersion: updateInfo.version,
+        updateUrl: lanServerUrl,
+        sha256: updateInfo.sha256,
+      });
+      setBroadcastResult(result);
+      console.log('Broadcast result:', result);
+    } catch (error) {
+      console.error('Failed to broadcast update:', error);
+      alert(`Failed to broadcast update: ${error}`);
+    } finally {
+      setIsBroadcasting(false);
+    }
   };
 
   const getStateDisplay = () => {
@@ -393,15 +492,89 @@ const UpdatesPage: React.FC = () => {
       {/* Client Status Table */}
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 rounded-xl">
-              <Monitor className="w-5 h-5 text-indigo-600" />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-indigo-50 rounded-xl">
+                <Monitor className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Connected Students</h2>
+                <p className="text-sm text-slate-500">Monitor update status across all clients</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-800">Connected Students</h2>
-              <p className="text-sm text-slate-500">Monitor update status across all clients</p>
+            
+            {/* LAN Distribution Controls */}
+            <div className="flex items-center gap-3">
+              {/* LAN Server Status */}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold ${
+                lanServerUrl ? 'bg-green-50 text-green-700' : 'bg-slate-50 text-slate-500'
+              }`}>
+                <Server className="w-4 h-4" />
+                {lanServerUrl ? 'LAN Server Running' : 'LAN Server Stopped'}
+              </div>
+
+              {/* Start/Stop LAN Server */}
+              {!lanServerUrl ? (
+                <button
+                  onClick={handleStartLanServer}
+                  disabled={isStartingLan || updateState.type !== 'ReadyToInstall'}
+                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={updateState.type !== 'ReadyToInstall' ? 'Download update first' : 'Start LAN distribution server'}
+                >
+                  {isStartingLan ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Server className="w-4 h-4" />
+                  )}
+                  Start LAN Server
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={handleBroadcastUpdate}
+                    disabled={isBroadcasting || clientStatuses.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isBroadcasting ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
+                    Broadcast Update
+                  </button>
+                  <button
+                    onClick={handleStopLanServer}
+                    className="flex items-center gap-2 px-4 py-2 bg-rose-600 text-white rounded-xl text-sm font-bold hover:bg-rose-700 transition"
+                  >
+                    <Server className="w-4 h-4" />
+                    Stop Server
+                  </button>
+                </>
+              )}
             </div>
           </div>
+
+          {/* Broadcast Result */}
+          {broadcastResult && (
+            <div className="mt-4 p-3 bg-indigo-50 border border-indigo-200 rounded-xl">
+              <div className="flex items-center gap-2 text-sm">
+                <Users className="w-4 h-4 text-indigo-600" />
+                <span className="font-bold text-indigo-900">
+                  Broadcast sent to {broadcastResult.sent_count}/{broadcastResult.total_students} students
+                </span>
+                {broadcastResult.failed_ids.length > 0 && (
+                  <span className="text-rose-600 ml-2">
+                    (Failed: {broadcastResult.failed_ids.join(', ')})
+                  </span>
+                )}
+              </div>
+              {lanServerUrl && (
+                <p className="text-xs text-indigo-600 mt-1 font-mono">
+                  Download URL: {lanServerUrl}
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">

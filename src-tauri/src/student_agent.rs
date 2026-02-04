@@ -164,6 +164,15 @@ pub enum TeacherMessage {
         update_url: Option<String>,
         sha256: Option<String>,
     },
+
+    /// Broadcast update required from teacher
+    /// Requirements: 14.1, 14.2
+    #[serde(rename = "update_required")]
+    UpdateRequired {
+        required_version: String,
+        update_url: String,
+        sha256: Option<String>,
+    },
 }
 
 /// Messages from student to teacher
@@ -228,6 +237,13 @@ pub enum StudentMessage {
         status: String, // "downloading", "verifying", "installing", "completed", "failed"
         progress: Option<f32>,
         error: Option<String>,
+    },
+
+    /// Acknowledgment of update_required broadcast
+    /// Requirements: 14.4
+    #[serde(rename = "update_acknowledged")]
+    UpdateAcknowledged {
+        version: String,
     },
 }
 
@@ -758,6 +774,66 @@ where
             } else {
                 log::info!("[StudentAgent] Version matches, no update required");
             }
+        }
+
+        // Handle broadcast update_required from teacher
+        // Requirements: 14.1, 14.2, 14.4
+        TeacherMessage::UpdateRequired {
+            required_version,
+            update_url,
+            sha256,
+        } => {
+            log::info!(
+                "[StudentAgent] Received update_required broadcast: version={}, url={}",
+                required_version,
+                update_url
+            );
+
+            let current_version = state.get_current_version();
+
+            // Update connection state to mark update required
+            {
+                let mut conns = state.connections.lock().unwrap();
+                if let Some(conn) = conns.get_mut(&addr) {
+                    conn.update_required = true;
+                }
+            }
+
+            // Set status to UpdateRequired
+            state.set_status(AgentStatus::UpdateRequired {
+                current_version: current_version.clone(),
+                required_version: required_version.clone(),
+                update_url: Some(update_url.clone()),
+            });
+
+            log::warn!(
+                "[StudentAgent] Update required (broadcast): {} -> {}",
+                current_version,
+                required_version
+            );
+
+            // Send acknowledgment to teacher
+            // Requirements: 14.4
+            let ack_msg = StudentMessage::UpdateAcknowledged {
+                version: required_version.clone(),
+            };
+            send_message(write, &ack_msg).await?;
+
+            // Send update status to teacher
+            let status_msg = StudentMessage::UpdateStatus {
+                status: "update_required".to_string(),
+                progress: None,
+                error: None,
+            };
+            send_message(write, &status_msg).await?;
+
+            // Store update info for the StudentUpdateCoordinator to use
+            // The frontend will trigger the download using the stored URL and hash
+            log::info!(
+                "[StudentAgent] Update info stored: url={}, sha256={:?}",
+                update_url,
+                sha256
+            );
         }
     }
 
