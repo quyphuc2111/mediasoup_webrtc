@@ -24,49 +24,25 @@ pub use types::{
 };
 
 // Re-export config functions
-pub use config::{load_config, save_config, ensure_config_exists, get_config_path};
+pub use config::{load_config, save_config, get_config_path};
 
 // Re-export API client
 pub use api_client::UpdateApiClient;
 
 // Re-export coordinator
-pub use coordinator::{
-    UpdateCoordinator,
-    PersistedUpdateState,
-    PendingUpdate,
-    StateChangeEvent,
-    PostUpdateVerification,
-};
+pub use coordinator::UpdateCoordinator;
 
 // Re-export downloader
-pub use downloader::{Downloader, DownloadProgress, ProgressCallback};
+pub use downloader::{Downloader, DownloadProgress};
 
 // Re-export verifier
 pub use verifier::Verifier;
 
 // Re-export installer
-pub use installer::{InstallerRunner, InstallerType, InstallError};
-
-// Re-export logger
-pub use logger::{UpdateLogger, UpdateLogEntry, LogLevel};
-
-// Re-export handshake
-pub use handshake::{
-    VersionHandshakeRequest,
-    VersionHandshakeResponse,
-    check_version_compatibility,
-    check_version_compatibility_with_update,
-    compare_versions,
-    is_version_older,
-    parse_semver,
-};
+pub use installer::InstallerRunner;
 
 // Re-export LAN server
-pub use lan_server::{LanDistributionServer, ServerError};
+pub use lan_server::LanDistributionServer;
 
 // Re-export student coordinator
-pub use student_coordinator::{
-    StudentUpdateCoordinator,
-    StudentUpdateState,
-    StudentUpdateProgressEvent,
-};
+pub use student_coordinator::{StudentUpdateCoordinator, StudentUpdateState};

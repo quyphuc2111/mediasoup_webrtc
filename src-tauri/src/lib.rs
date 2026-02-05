@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -103,7 +105,7 @@ fn get_resource_path(app: &AppHandle, resource: &str) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-fn start_server(app: AppHandle, state: State<ServerState>) -> Result<ServerInfo, String> {
+fn start_server(_app: AppHandle, state: State<ServerState>) -> Result<ServerInfo, String> {
     let mut process_guard = state.process.lock().map_err(|e| e.to_string())?;
 
     // Check if already running

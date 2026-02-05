@@ -258,12 +258,33 @@ impl StudentUpdateCoordinator {
             .await
             .map_err(|e| UpdateError::FileSystem(format!("Failed to create temp dir: {}", e)))?;
 
-        // Extract filename from URL or use default
-        let filename = update_url
+        // Extract filename from URL or use default with proper extension
+        let url_filename = update_url
             .split('/')
             .last()
             .unwrap_or("student_update_package");
-        let dest_path = temp_dir.join(filename);
+        
+        // Check if filename has a valid installer extension, if not add one based on OS
+        let filename = if url_filename.contains('.') 
+            && (url_filename.ends_with(".exe") 
+                || url_filename.ends_with(".msi") 
+                || url_filename.ends_with(".dmg") 
+                || url_filename.ends_with(".pkg")) 
+        {
+            url_filename.to_string()
+        } else {
+            // Add appropriate extension based on OS
+            #[cfg(target_os = "windows")]
+            let ext = ".exe";
+            #[cfg(target_os = "macos")]
+            let ext = ".dmg";
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            let ext = "";
+            
+            format!("{}{}", url_filename, ext)
+        };
+        
+        let dest_path = temp_dir.join(&filename);
 
         // Create downloader
         let downloader = Downloader::new();

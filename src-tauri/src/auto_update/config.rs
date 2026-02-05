@@ -1,7 +1,6 @@
 // Update Configuration File Handler
 // Loads and saves update configuration from/to a JSON file
 
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::fs;
 

@@ -177,14 +177,6 @@ impl MediasoupManager {
     pub fn max_clients_per_room(&self) -> usize {
         self.config.max_clients_per_room
     }
-
-    pub fn local_ip(&self) -> &str {
-        &self.local_ip
-    }
-
-    pub fn listen_port(&self) -> u16 {
-        self.config.listen_port
-    }
 }
 
 /// Transport parameters for client

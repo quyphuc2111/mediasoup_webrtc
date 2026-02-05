@@ -64,6 +64,8 @@ struct ServerState {
     package_path: PathBuf,
     package_hash: String,
     package_size: u64,
+    /// Original filename with extension for Content-Disposition
+    filename: String,
 }
 
 /// LAN distribution server for serving update packages to Students
@@ -137,11 +139,19 @@ impl LanDistributionServer {
             *stored_hash = Some(hash.clone());
         }
 
+        // Extract original filename for Content-Disposition header
+        let filename = package_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("update_package")
+            .to_string();
+
         // Create shared state for handlers
         let state = Arc::new(ServerState {
             package_path,
             package_hash: hash,
             package_size,
+            filename,
         });
 
         // Build the router
@@ -320,13 +330,13 @@ async fn serve_package(
     }
 
     // Serve full file
-    serve_full_content(file, file_size, &state.package_hash).await
+    serve_full_content(file, file_size, &state.package_hash, &state.filename).await
 }
 
 /// Serve the full file content
 /// 
 /// Requirements: 7.1, 7.3
-async fn serve_full_content(file: File, file_size: u64, hash: &str) -> Response {
+async fn serve_full_content(file: File, file_size: u64, hash: &str, filename: &str) -> Response {
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
@@ -338,7 +348,7 @@ async fn serve_full_content(file: File, file_size: u64, hash: &str) -> Response 
         .header("X-SHA256", hash)
         .header(
             header::CONTENT_DISPOSITION,
-            "attachment; filename=\"update.exe\"",
+            format!("attachment; filename=\"{}\"", filename),
         )
         .body(body)
         .unwrap()

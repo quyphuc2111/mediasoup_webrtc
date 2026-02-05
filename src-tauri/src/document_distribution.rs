@@ -237,8 +237,7 @@ pub async fn start_document_server(
     port: u16,
 ) -> Result<(), String> {
     use tokio::net::TcpListener;
-    use tokio::io::{AsyncBufReadExt, BufReader};
-    
+
     // Check if already running
     {
         let is_running = state.is_running.lock().map_err(|e| e.to_string())?;
@@ -298,7 +297,7 @@ async fn handle_http_request(
     state: Arc<DocumentServerState>,
     stream: &mut tokio::net::TcpStream,
 ) -> Result<(), String> {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
     
     let (reader, mut writer) = stream.split();
     let mut buf_reader = BufReader::new(reader);
