@@ -107,10 +107,6 @@ impl InstallerRunner {
     /// Uses ShellExecuteW with "runas" verb to trigger UAC prompt
     #[cfg(target_os = "windows")]
     fn run_elevated(exe_path: &str, args: &[&str]) -> IoResult<std::process::Output> {
-        use std::os::windows::ffi::OsStrExt;
-        use std::ffi::OsStr;
-        use std::ptr::null_mut;
-        
         // For elevated execution, we need to use a different approach
         // Since ShellExecuteW doesn't give us output, we'll use a workaround:
         // Run the installer and wait for it to complete
