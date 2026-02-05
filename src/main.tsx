@@ -1,6 +1,18 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import StudentTrayApp from "./StudentTrayApp";
+import { getName } from '@tauri-apps/api/app';
+
+// Detect if running in student tray mode
+async function detectStudentMode(): Promise<boolean> {
+  try {
+    const appName = await getName();
+    return appName.toLowerCase().includes('student');
+  } catch {
+    return false;
+  }
+}
 
 // Polyfill for navigator.mediaDevices if it doesn't exist (for Tauri WebView compatibility)
 if (typeof navigator !== 'undefined' && !navigator.mediaDevices) {
@@ -43,8 +55,23 @@ if (typeof navigator !== 'undefined' && !navigator.mediaDevices) {
   console.log('[MediaDevices] Methods:', Object.keys(navigator.mediaDevices));
 }
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+// Render appropriate app based on mode
+detectStudentMode().then(isStudentMode => {
+  const rootElement = document.getElementById("root") as HTMLElement;
+  
+  if (isStudentMode) {
+    console.log('[App] Running in Student Tray mode');
+    ReactDOM.createRoot(rootElement).render(
+      <React.StrictMode>
+        <StudentTrayApp />
+      </React.StrictMode>,
+    );
+  } else {
+    console.log('[App] Running in Teacher/Admin mode');
+    ReactDOM.createRoot(rootElement).render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>,
+    );
+  }
+});

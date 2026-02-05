@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -18,6 +19,8 @@ mod lan_discovery;
 mod ldap_auth;
 mod screen_capture;
 mod student_agent;
+mod student_auto_connect;
+mod student_tray;
 mod teacher_connector;
 mod udp_audio;
 
@@ -762,6 +765,9 @@ fn start_student_agent(
         config.student_name = student_name;
     }
 
+    // Reset auto-connect stop flag
+    agent_state.auto_connect_stop.store(false, Ordering::Relaxed);
+
     // Start file receiver for chunked transfers
     let transfer_state_clone = Arc::clone(&transfer_state);
     let app_clone = app.clone();
@@ -783,12 +789,32 @@ fn start_student_agent(
         }
     });
 
+    // Start auto-connect service to find teacher
+    let auto_connect_config = student_auto_connect::AutoConnectConfig {
+        teacher_port: 3018, // Teacher discovery port (different from student agent port)
+        retry_interval_secs: 10,
+        discovery_timeout_ms: 3000,
+    };
+    let stop_flag = Arc::clone(&agent_state.auto_connect_stop);
+    get_agent_runtime().spawn(async move {
+        if let Err(e) = student_auto_connect::start_auto_connect(auto_connect_config, stop_flag).await {
+            log::error!("[StudentAutoConnect] Error: {}", e);
+        }
+    });
+
+    log::info!("[StudentAgent] Started with auto-connect enabled");
+
     Ok(())
 }
 
 /// Stop the student agent
 #[tauri::command]
 fn stop_student_agent(state: State<Arc<AgentState>>) -> Result<(), String> {
+    // Stop auto-connect service
+    state.auto_connect_stop.store(true, Ordering::Relaxed);
+    log::info!("[StudentAgent] Stopping auto-connect service");
+    
+    // Stop agent
     student_agent::stop_agent(&state)
 }
 
@@ -1022,6 +1048,21 @@ fn send_logout_command(
     state: State<Arc<ConnectorState>>,
 ) -> Result<(), String> {
     teacher_connector::send_logout(&state, &student_id)
+}
+
+/// Start teacher discovery service to respond to student auto-connect requests
+#[tauri::command]
+fn start_teacher_discovery(teacher_name: String) -> Result<(), String> {
+    log::info!("[TeacherDiscovery] Starting discovery service with name: {}", teacher_name);
+    
+    // Start discovery responder in background thread
+    std::thread::spawn(move || {
+        if let Err(e) = student_auto_connect::respond_to_student_discovery(&teacher_name, 3018) {
+            log::error!("[TeacherDiscovery] Discovery service error: {}", e);
+        }
+    });
+    
+    Ok(())
 }
 
 /// Send file to a student (chunked TCP transfer)
@@ -1751,10 +1792,98 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // Initialize logging system
             init_logging(app.handle().clone());
             log_debug("info", "Application started - logging system initialized");
+            
+            // Check if running in student mode (based on product name)
+            let is_student_mode = app.config().product_name
+                .as_ref()
+                .map(|name| name.contains("Student"))
+                .unwrap_or(false);
+            
+            if is_student_mode {
+                log::info!("[Setup] Running in Student mode - initializing system tray");
+                
+                // Setup system tray for student
+                if let Err(e) = student_tray::setup_tray(app.handle()) {
+                    log::error!("[Setup] Failed to setup system tray: {}", e);
+                } else {
+                    log::info!("[Setup] System tray initialized successfully");
+                }
+                
+                // Start agent status monitor
+                let app_handle = app.handle().clone();
+                let agent_state = app.state::<Arc<AgentState>>();
+                let agent_state_clone = Arc::clone(&agent_state);
+                
+                tauri::async_runtime::spawn(async move {
+                    student_tray::monitor_agent_status(app_handle, agent_state_clone).await;
+                });
+                
+                // Auto-start student agent
+                log::info!("[Setup] Auto-starting student agent...");
+                let agent_state = app.state::<Arc<AgentState>>();
+                let transfer_state = app.state::<Arc<FileTransferState>>();
+                let app_handle = app.handle().clone();
+                
+                // Get machine name for student name
+                let student_name = std::env::var("COMPUTERNAME")
+                    .or_else(|_| std::env::var("HOSTNAME"))
+                    .unwrap_or_else(|_| "Student".to_string());
+                
+                // Update config
+                {
+                    if let Ok(mut config) = agent_state.config.lock() {
+                        config.port = 3017;
+                        config.student_name = student_name.clone();
+                    }
+                }
+                
+                // Reset auto-connect stop flag
+                agent_state.auto_connect_stop.store(false, std::sync::atomic::Ordering::Relaxed);
+                
+                // Start file receiver
+                let transfer_state_clone = Arc::clone(&transfer_state);
+                let app_clone = app_handle.clone();
+                get_agent_runtime().spawn(async move {
+                    if let Err(e) = file_transfer::start_file_receiver(
+                        transfer_state_clone,
+                        app_clone,
+                        3017,
+                    ).await {
+                        log::error!("[FileTransfer] Failed to start file receiver: {}", e);
+                    }
+                });
+                
+                // Start agent
+                let state_clone = Arc::clone(&agent_state);
+                get_agent_runtime().spawn(async move {
+                    if let Err(e) = student_agent::start_agent(state_clone).await {
+                        log::error!("[StudentAgent] Error: {}", e);
+                    }
+                });
+                
+                // Start auto-connect service
+                let auto_connect_config = student_auto_connect::AutoConnectConfig {
+                    teacher_port: 3018,
+                    retry_interval_secs: 10,
+                    discovery_timeout_ms: 3000,
+                };
+                let stop_flag = Arc::clone(&agent_state.auto_connect_stop);
+                get_agent_runtime().spawn(async move {
+                    if let Err(e) = student_auto_connect::start_auto_connect(auto_connect_config, stop_flag).await {
+                        log::error!("[StudentAutoConnect] Error: {}", e);
+                    }
+                });
+                
+                log::info!("[Setup] Student agent auto-started with system tray");
+            } else {
+                log::info!("[Setup] Running in Teacher mode");
+            }
+            
             Ok(())
         })
         .manage(ServerState::default())
@@ -1831,6 +1960,7 @@ pub fn run() {
             send_restart_command,
             send_lock_screen_command,
             send_logout_command,
+            start_teacher_discovery,
             send_file_to_student,
             cancel_file_transfer,
             get_file_transfer_status,

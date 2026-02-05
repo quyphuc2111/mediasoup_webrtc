@@ -268,6 +268,8 @@ pub struct AgentState {
     connections: Mutex<HashMap<SocketAddr, TeacherConnection>>,
     /// Current app version for version handshake
     pub current_version: Mutex<String>,
+    /// Stop flag for auto-connect service
+    pub auto_connect_stop: Arc<AtomicBool>,
 }
 
 impl Default for AgentState {
@@ -278,6 +280,7 @@ impl Default for AgentState {
             shutdown_tx: Mutex::new(None),
             connections: Mutex::new(HashMap::new()),
             current_version: Mutex::new(env!("CARGO_PKG_VERSION").to_string()),
+            auto_connect_stop: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -399,8 +402,10 @@ async fn handle_connection(
     let teacher_ip = addr.ip().to_string();
     state.set_status(AgentStatus::Connected {
         teacher_name: "Teacher".to_string(),
-        teacher_ip,
+        teacher_ip: teacher_ip.clone(),
     });
+
+    log::info!("[StudentAgent] Auto-starting screen capture for teacher at {}", teacher_ip);
 
     // AUTO-START SCREEN CAPTURE on connection
     if let Err(e) = start_screen_capture(addr, &state, &frame_tx) {

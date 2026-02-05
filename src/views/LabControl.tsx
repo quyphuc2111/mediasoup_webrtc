@@ -130,6 +130,11 @@ const LabControl: React.FC<LabControlProps> = () => {
   // Load saved devices on mount
   useEffect(() => {
     loadSavedDevices();
+    
+    // Start teacher discovery service to respond to student auto-connect
+    invoke('start_teacher_discovery', { teacherName: 'Teacher' })
+      .then(() => console.log('[LabControl] Teacher discovery service started'))
+      .catch((e) => console.error('[LabControl] Failed to start teacher discovery:', e));
   }, []);
 
   // Poll connections every second
