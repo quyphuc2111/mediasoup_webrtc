@@ -529,6 +529,19 @@ impl StudentUpdateCoordinator {
     pub fn complete(&self, app: Option<&AppHandle>) {
         self.transition_state(StudentUpdateState::Done, app);
     }
+
+    /// Transition to Failed state (for installation errors)
+    pub fn transition_to_failed(&self, error: String, app: Option<&AppHandle>) {
+        let retry_count = *self.retry_count.lock().unwrap();
+        self.transition_state(
+            StudentUpdateState::Failed {
+                error,
+                retry_count,
+                can_retry: true,
+            },
+            app,
+        );
+    }
 }
 
 #[cfg(test)]

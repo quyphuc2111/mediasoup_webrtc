@@ -80,6 +80,14 @@ const UpdateRequiredScreen: React.FC<UpdateRequiredScreenProps> = ({ onUpdateCom
     }
   }, [updateState.type]);
 
+  // Auto-install when ready
+  useEffect(() => {
+    if (updateState.type === 'ReadyToInstall') {
+      console.log('[UpdateRequiredScreen] Auto-starting installation...');
+      handleInstall();
+    }
+  }, [updateState.type]);
+
   // Handle update completion
   useEffect(() => {
     if (updateState.type === 'Done' && onUpdateComplete) {

@@ -1613,26 +1613,71 @@ async fn install_student_update(
     app: AppHandle,
     state: State<'_, Arc<auto_update::StudentUpdateCoordinator>>,
 ) -> Result<(), String> {
+    log::info!("[StudentUpdate] Starting installation...");
+    
     // Get the download path
-    let download_path = state
-        .start_install(Some(&app))
-        .map_err(|e| e.to_string())?;
+    let download_path = match state.start_install(Some(&app)) {
+        Ok(path) => path,
+        Err(e) => {
+            log::error!("[StudentUpdate] Failed to start install: {}", e);
+            return Err(e.to_string());
+        }
+    };
+
+    log::info!("[StudentUpdate] Download path: {:?}", download_path);
 
     // Detect installer type
-    let installer_type = auto_update::InstallerRunner::detect_installer_type(&download_path)
-        .map_err(|e| e.to_string())?;
+    let installer_type = match auto_update::InstallerRunner::detect_installer_type(&download_path) {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("[StudentUpdate] Failed to detect installer type: {}", e);
+            // Transition to Failed state
+            state.transition_to_failed(e.to_string(), Some(&app));
+            return Err(e.to_string());
+        }
+    };
 
-    // Run the installer
-    auto_update::InstallerRunner::run_silent(&download_path, installer_type)
-        .map_err(|e| e.to_string())?;
+    log::info!("[StudentUpdate] Installer type: {:?}", installer_type);
+
+    // Run the installer in a blocking task to avoid blocking the async runtime
+    let download_path_clone = download_path.clone();
+    let install_result = tokio::task::spawn_blocking(move || {
+        log::info!("[StudentUpdate] Running installer silently...");
+        auto_update::InstallerRunner::run_silent(&download_path_clone, installer_type)
+    })
+    .await;
+
+    match install_result {
+        Ok(Ok(())) => {
+            log::info!("[StudentUpdate] Installation completed successfully");
+        }
+        Ok(Err(e)) => {
+            log::error!("[StudentUpdate] Installer failed: {}", e);
+            state.transition_to_failed(e.to_string(), Some(&app));
+            return Err(e.to_string());
+        }
+        Err(e) => {
+            log::error!("[StudentUpdate] Task join error: {}", e);
+            state.transition_to_failed(format!("Task join error: {}", e), Some(&app));
+            return Err(format!("Task join error: {}", e));
+        }
+    }
 
     // Mark as restarting
-    state.start_restart(Some(&app)).map_err(|e| e.to_string())?;
+    if let Err(e) = state.start_restart(Some(&app)) {
+        log::error!("[StudentUpdate] Failed to start restart: {}", e);
+        return Err(e.to_string());
+    }
+
+    log::info!("[StudentUpdate] Scheduling app restart in 2 seconds...");
 
     // Schedule restart
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        let _ = auto_update::InstallerRunner::restart_app();
+        log::info!("[StudentUpdate] Restarting app now...");
+        if let Err(e) = auto_update::InstallerRunner::restart_app() {
+            log::error!("[StudentUpdate] Failed to restart app: {}", e);
+        }
     });
 
     Ok(())
