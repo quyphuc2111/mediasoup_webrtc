@@ -11,6 +11,25 @@ interface AgentStatus {
           { Error: { message: string } };
 }
 
+interface ConnectedStatus {
+  Connected: {
+    teacher_name: string;
+    teacher_ip: string;
+  };
+}
+
+interface UpdatingStatus {
+  Updating: {
+    progress: number;
+  };
+}
+
+interface ErrorStatus {
+  Error: {
+    message: string;
+  };
+}
+
 const StudentTrayWindow: React.FC = () => {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [studentName, setStudentName] = useState('Student');
@@ -45,8 +64,7 @@ const StudentTrayWindow: React.FC = () => {
   const handleQuit = async () => {
     try {
       await invoke('stop_student_agent');
-      const { exit } = await import('@tauri-apps/plugin-process');
-      await exit(0);
+      await invoke('quit_app');
     } catch (error) {
       console.error('Failed to quit:', error);
     }
@@ -96,9 +114,10 @@ const StudentTrayWindow: React.FC = () => {
     }
 
     if ('Connected' in status) {
+      const connectedStatus = status as ConnectedStatus;
       return {
         icon: <CheckCircle2 className="w-8 h-8 text-emerald-500" />,
-        text: `Đã kết nối: ${status.Connected.teacher_name}`,
+        text: `Đã kết nối: ${connectedStatus.Connected.teacher_name}`,
         color: 'text-emerald-600',
         bgColor: 'bg-emerald-50',
       };
@@ -114,18 +133,20 @@ const StudentTrayWindow: React.FC = () => {
     }
 
     if ('Updating' in status) {
+      const updatingStatus = status as UpdatingStatus;
       return {
         icon: <Loader2 className="w-8 h-8 animate-spin text-blue-500" />,
-        text: `Đang cập nhật: ${Math.round(status.Updating.progress * 100)}%`,
+        text: `Đang cập nhật: ${Math.round(updatingStatus.Updating.progress * 100)}%`,
         color: 'text-blue-600',
         bgColor: 'bg-blue-50',
       };
     }
 
     if ('Error' in status) {
+      const errorStatus = status as ErrorStatus;
       return {
         icon: <AlertCircle className="w-8 h-8 text-rose-500" />,
-        text: `Lỗi: ${status.Error.message}`,
+        text: `Lỗi: ${errorStatus.Error.message}`,
         color: 'text-rose-600',
         bgColor: 'bg-rose-50',
       };
