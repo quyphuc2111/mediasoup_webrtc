@@ -818,6 +818,14 @@ fn stop_student_agent(state: State<Arc<AgentState>>) -> Result<(), String> {
     student_agent::stop_agent(&state)
 }
 
+/// Quit the application (for student tray)
+#[tauri::command]
+fn quit_app(app: AppHandle) -> Result<(), String> {
+    log::info!("[App] Quit requested");
+    app.exit(0);
+    Ok(())
+}
+
 /// Get current agent status
 #[tauri::command]
 fn get_agent_status(state: State<Arc<AgentState>>) -> AgentStatus {
@@ -1052,12 +1060,82 @@ fn send_logout_command(
 
 /// Start teacher discovery service to respond to student auto-connect requests
 #[tauri::command]
-fn start_teacher_discovery(teacher_name: String) -> Result<(), String> {
+fn start_teacher_discovery(
+    app: AppHandle,
+    teacher_name: String,
+    connector_state: State<Arc<ConnectorState>>,
+) -> Result<(), String> {
     log::info!("[TeacherDiscovery] Starting discovery service with name: {}", teacher_name);
     
-    // Start discovery responder in background thread
+    // Clone state for the thread
+    let state = Arc::clone(&connector_state);
+    
+    // Start discovery responder in background thread with auto-connect callback
     std::thread::spawn(move || {
-        if let Err(e) = student_auto_connect::respond_to_student_discovery(&teacher_name, 3018) {
+        let on_student_found = move |ip: String, port: u16| {
+            log::info!("[TeacherDiscovery] Auto-connecting to student at {}:{}", ip, port);
+            
+            // Clone for async task
+            let state_clone = Arc::clone(&state);
+            let app_clone = app.clone();
+            let ip_clone = ip.clone();
+            
+            // Spawn connection in connector runtime
+            get_connector_runtime().spawn(async move {
+                // Generate connection ID
+                let id = format!("{}:{}", ip_clone, port);
+                
+                // Check if already connected
+                if let Some(conn) = state_clone.get_connection(&id) {
+                    if conn.status != teacher_connector::ConnectionStatus::Disconnected
+                        && !matches!(conn.status, teacher_connector::ConnectionStatus::Error { .. })
+                    {
+                        log::info!("[TeacherDiscovery] Already connected to {}", id);
+                        return;
+                    }
+                }
+                
+                // Create connection entry
+                let connection = teacher_connector::StudentConnection {
+                    id: id.clone(),
+                    ip: ip_clone.clone(),
+                    port,
+                    name: None,
+                    status: teacher_connector::ConnectionStatus::Connecting,
+                    current_version: None,
+                    machine_name: None,
+                    update_status: None,
+                };
+                
+                // Store connection
+                {
+                    if let Ok(mut conns) = state_clone.connections.lock() {
+                        conns.insert(id.clone(), connection);
+                    }
+                }
+                
+                // Start connection
+                log::info!("[TeacherDiscovery] Connecting to {}:{}", ip_clone, port);
+                match teacher_connector::handle_connection_async(
+                    state_clone,
+                    id.clone(),
+                    ip_clone.clone(),
+                    port,
+                    app_clone,
+                )
+                .await
+                {
+                    Ok(()) => log::info!("[TeacherDiscovery] Connection to {} closed normally", id),
+                    Err(e) => log::error!("[TeacherDiscovery] Connection to {} failed: {}", id, e),
+                }
+            });
+        };
+        
+        if let Err(e) = student_auto_connect::respond_to_student_discovery_with_callback(
+            &teacher_name,
+            3018,
+            on_student_found,
+        ) {
             log::error!("[TeacherDiscovery] Discovery service error: {}", e);
         }
     });
@@ -1941,6 +2019,7 @@ pub fn run() {
             // Student Agent commands
             start_student_agent,
             stop_student_agent,
+            quit_app,
             get_agent_status,
             get_agent_config,
             // Teacher Connector commands

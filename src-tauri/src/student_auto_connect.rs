@@ -134,7 +134,79 @@ fn discover_teacher(port: u16, timeout_ms: u64) -> Result<Option<String>, String
     Ok(None)
 }
 
-/// Teacher-side: Respond to student discovery requests
+/// Teacher-side: Respond to student discovery requests and auto-connect
+pub fn respond_to_student_discovery_with_callback<F>(
+    teacher_name: &str,
+    port: u16,
+    on_student_found: F,
+) -> Result<(), String>
+where
+    F: Fn(String, u16) + Send + 'static,
+{
+    let socket = UdpSocket::bind(format!("0.0.0.0:{}", port))
+        .map_err(|e| format!("Failed to bind response socket on port {}: {}", port, e))?;
+
+    socket
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .map_err(|e| format!("Failed to set timeout: {}", e))?;
+
+    socket
+        .set_broadcast(true)
+        .map_err(|e| format!("Failed to enable broadcast: {}", e))?;
+
+    log::info!("[TeacherDiscovery] Listening for student discovery requests on port {}", port);
+
+    let mut buffer = [0u8; 1024];
+    let mut discovered_students = std::collections::HashSet::new();
+
+    loop {
+        match socket.recv_from(&mut buffer) {
+            Ok((size, addr)) => {
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let request_trimmed = request.trim();
+
+                if request_trimmed == "STUDENT_LOOKING_FOR_TEACHER" {
+                    let student_ip = addr.ip().to_string();
+                    
+                    // Send response
+                    let response = format!("TEACHER_HERE:{}", teacher_name);
+                    match socket.send_to(response.as_bytes(), addr) {
+                        Ok(_) => {
+                            log::info!("[TeacherDiscovery] ✅ Responded to student at {}", addr);
+                            
+                            // Auto-connect to new student (only once per IP)
+                            if !discovered_students.contains(&student_ip) {
+                                discovered_students.insert(student_ip.clone());
+                                log::info!("[TeacherDiscovery] New student discovered: {}, auto-connecting...", student_ip);
+                                
+                                // Callback to connect
+                                on_student_found(student_ip, 3017);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("[TeacherDiscovery] Failed to respond to {}: {}", addr, e);
+                        }
+                    }
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                continue;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                continue;
+            }
+            Err(ref e) if e.raw_os_error() == Some(35) => {
+                continue;
+            }
+            Err(e) => {
+                log::error!("[TeacherDiscovery] Error: {}", e);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+/// Teacher-side: Respond to student discovery requests (legacy, no auto-connect)
 pub fn respond_to_student_discovery(teacher_name: &str, port: u16) -> Result<(), String> {
     let socket = UdpSocket::bind(format!("0.0.0.0:{}", port))
         .map_err(|e| format!("Failed to bind response socket on port {}: {}", port, e))?;

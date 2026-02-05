@@ -69,6 +69,19 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::err
         })
         .build(app)?;
 
+    // Setup window close handler to prevent closing
+    if let Some(window) = app.get_webview_window("main") {
+        let window_clone = window.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent window from closing, just hide it
+                let _ = window_clone.hide();
+                api.prevent_close();
+                log::info!("[StudentTray] Close requested, hiding window instead");
+            }
+        });
+    }
+
     log::info!("[StudentTray] System tray initialized");
     Ok(())
 }

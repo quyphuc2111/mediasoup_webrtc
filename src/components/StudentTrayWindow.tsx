@@ -62,6 +62,9 @@ const StudentTrayWindow: React.FC = () => {
   };
 
   const handleQuit = async () => {
+    const confirmed = confirm('Bạn có chắc chắn muốn thoát ứng dụng? Giáo viên sẽ không thể kết nối với bạn nữa.');
+    if (!confirmed) return;
+    
     try {
       await invoke('stop_student_agent');
       await invoke('quit_app');
@@ -192,15 +195,18 @@ const StudentTrayWindow: React.FC = () => {
       </div>
 
       {/* Footer */}
-      <div className="px-4 py-3 bg-slate-50 border-t border-slate-200">
+      <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 space-y-2">
         <button
           onClick={handleQuit}
           className="w-full py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-bold transition-colors"
         >
-          Thoát ứng dụng
+          Thoát ứng dụng hoàn toàn
         </button>
-        <p className="text-xs text-slate-400 text-center mt-2">
-          Ứng dụng đang chạy ngầm
+        <p className="text-xs text-slate-400 text-center">
+          Ứng dụng đang chạy ngầm. Đóng cửa sổ này sẽ không thoát app.
+        </p>
+        <p className="text-xs text-amber-600 text-center font-medium">
+          ⚠️ Chỉ thoát khi thực sự cần thiết
         </p>
       </div>
     </div>
