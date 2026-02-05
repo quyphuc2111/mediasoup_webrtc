@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { 
   LayoutDashboard, Users, Monitor, Calendar, 
   MessageSquare, FileText, LogOut, 
@@ -87,6 +88,14 @@ const App: React.FC = () => {
   const [updateAvailable, setUpdateAvailable] = useState<UpdateInfo | null>(null);
   const [showUpdateNotification, setShowUpdateNotification] = useState<boolean>(false);
   const updateCheckDone = useRef(false);
+
+  // App version state
+  const [appVersion, setAppVersion] = useState<string>('...');
+
+  // Get app version on mount
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
+  }, []);
 
   // Initialize database on app start
   useEffect(() => {
@@ -468,8 +477,9 @@ const App: React.FC = () => {
           <div className="p-12 bg-indigo-600 text-white text-center relative overflow-hidden">
             <div className="absolute top-0 right-0 p-8 opacity-10"><Monitor className="w-32 h-32" /></div>
             <Monitor className="w-16 h-16 mx-auto mb-6 bg-white/20 p-4 rounded-2xl" />
-            <h1 className="text-3xl font-black uppercase tracking-tight">Smart Lab 123</h1>
+            <h1 className="text-3xl font-black uppercase tracking-tight">Smart Lab ProMax</h1>
             <p className="text-indigo-100 mt-2 text-sm font-medium">Hệ thống quản lý phòng máy số hóa</p>
+            <p className="text-indigo-200 mt-1 text-xs font-bold">v{appVersion}</p>
           </div>
           <form onSubmit={handleLogin} className="p-12 space-y-6 bg-slate-50">
             {!dbInitialized && (
@@ -575,7 +585,12 @@ const App: React.FC = () => {
       <aside className={`${isSidebarOpen ? 'w-80' : 'w-24'} transition-all duration-500 bg-slate-950 flex flex-col z-50`}>
         <div className="p-10 flex items-center gap-4">
           <div className="p-3 bg-indigo-500 rounded-2xl shadow-lg shadow-indigo-500/40 animate-pulse"><Monitor className="text-white w-6 h-6" /></div>
-          {isSidebarOpen && <span className="font-black text-white text-2xl tracking-tighter italic">SMART LAB <span className='text-green-600'>ProMax</span></span>}
+          {isSidebarOpen && (
+            <div>
+              <span className="font-black text-white text-2xl tracking-tighter italic">SMART LAB <span className='text-green-600'>ProMax</span></span>
+              <p className="text-[10px] text-slate-500 font-bold mt-1">v{appVersion}</p>
+            </div>
+          )}
         </div>
         <nav className="flex-1 px-5 space-y-2 overflow-y-auto scrollbar-hide">
           {filteredMenuItems.map(item => (
