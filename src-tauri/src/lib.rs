@@ -1434,6 +1434,67 @@ fn get_latest_update_info(
     info
 }
 
+/// Check for Student app updates from API server
+/// This is used by Teacher to get Student app update info for LAN distribution
+#[tauri::command]
+async fn check_student_update(
+    state: State<'_, Arc<auto_update::UpdateCoordinator>>,
+) -> Result<Option<auto_update::UpdateInfo>, String> {
+    let config = state.get_config();
+    let client = auto_update::UpdateApiClient::from_config(config);
+    
+    // Get Student app update info
+    client
+        .get_latest_version_for_app("student")
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Download Student app update package for LAN distribution (Teacher only)
+/// Returns the path to the downloaded file
+#[tauri::command]
+async fn download_student_package_for_lan(
+    app: AppHandle,
+    download_url: String,
+    sha256: String,
+) -> Result<String, String> {
+    log::info!("[StudentPackage] Downloading from: {}", download_url);
+    
+    // Create temp directory for student updates
+    let temp_dir = std::env::temp_dir().join("smartlab_student_updates_dist");
+    tokio::fs::create_dir_all(&temp_dir)
+        .await
+        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    
+    // Extract filename from URL
+    let filename = download_url
+        .split('/')
+        .last()
+        .unwrap_or("student_update.exe");
+    let dest_path = temp_dir.join(filename);
+    
+    // Download with progress
+    let downloader = auto_update::Downloader::new();
+    let app_clone = app.clone();
+    
+    let progress_callback = Box::new(move |progress: auto_update::DownloadProgress| {
+        let _ = app_clone.emit("student-package-download-progress", &progress);
+    });
+    
+    let path = downloader
+        .download(&download_url, &dest_path, None, Some(progress_callback))
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
+    
+    // Verify hash
+    auto_update::Verifier::verify_sha256(&path, &sha256)
+        .map_err(|e| format!("Hash verification failed: {}", e))?;
+    
+    log::info!("[StudentPackage] Downloaded and verified: {:?}", path);
+    
+    Ok(path.to_string_lossy().to_string())
+}
+
 // ============================================================
 // LAN Distribution Commands (Teacher only)
 // ============================================================
@@ -1804,6 +1865,8 @@ pub fn run() {
             get_update_config_path,
             get_update_download_path,
             get_latest_update_info,
+            check_student_update,
+            download_student_package_for_lan,
             // LAN Distribution commands
             start_lan_distribution,
             stop_lan_distribution,

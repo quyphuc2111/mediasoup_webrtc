@@ -207,22 +207,96 @@ impl UpdateApiClient {
             .map_err(|e| UpdateError::ParseError(format!("Failed to read changelog: {}", e)))
     }
 
+    /// Get the latest version information for a specific app type
+    /// 
+    /// This is used by Teacher to get Student app update info for LAN distribution
+    /// 
+    /// # Arguments
+    /// * `app_type` - Application type ("teacher" or "student")
+    /// 
+    /// # Returns
+    /// * `Ok(Some(UpdateInfo))` - Latest version information if available
+    /// * `Ok(None)` - No update available
+    /// * `Err(UpdateError)` - Error if request fails
+    pub async fn get_latest_version_for_app(&self, app_type: &str) -> Result<Option<UpdateInfo>, UpdateError> {
+        let url = if self.base_url.ends_with("/api") {
+            format!(
+                "{}/updates/latest?app_type={}&channel={}&os={}&arch={}",
+                self.base_url, app_type, self.channel, self.os, self.arch
+            )
+        } else {
+            format!(
+                "{}/api/updates/latest?app_type={}&channel={}&os={}&arch={}",
+                self.base_url, app_type, self.channel, self.os, self.arch
+            )
+        };
+
+        log::info!("[UpdateApiClient] Fetching {} app update from: {}", app_type, url);
+
+        let response = self.http_client
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    UpdateError::Network(format!("Connection failed: {}", e))
+                } else if e.is_timeout() {
+                    UpdateError::Network(format!("Request timed out: {}", e))
+                } else {
+                    UpdateError::Network(format!("Request failed: {}", e))
+                }
+            })?;
+
+        let status = response.status();
+        
+        // 404 means no update available - return None
+        if status.as_u16() == 404 {
+            log::info!("[UpdateApiClient] No {} app update available", app_type);
+            return Ok(None);
+        }
+        
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let error_body = response.text().await.unwrap_or_default();
+            
+            return Err(UpdateError::ApiError {
+                status_code,
+                message: format!("HTTP {}: {}", status_code, error_body),
+            });
+        }
+
+        let update_info: UpdateInfo = response
+            .json()
+            .await
+            .map_err(|e| UpdateError::ParseError(format!("Failed to parse response: {}", e)))?;
+
+        Self::validate_update_info(&update_info)?;
+
+        log::info!("[UpdateApiClient] Found {} app update: v{}", app_type, update_info.version);
+        Ok(Some(update_info))
+    }
+
     /// Get the base URL
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
     /// Get the channel
+    #[allow(dead_code)]
     pub fn channel(&self) -> &str {
         &self.channel
     }
 
     /// Get the OS
+    #[allow(dead_code)]
     pub fn os(&self) -> &str {
         &self.os
     }
 
     /// Get the architecture
+    #[allow(dead_code)]
     pub fn arch(&self) -> &str {
         &self.arch
     }

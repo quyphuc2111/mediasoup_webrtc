@@ -75,6 +75,13 @@ const UpdatesPage: React.FC = () => {
   const [isStartingLan, setIsStartingLan] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [broadcastResult, setBroadcastResult] = useState<BroadcastResult | null>(null);
+  
+  // Student package state (for LAN distribution)
+  const [studentUpdateInfo, setStudentUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [isCheckingStudent, setIsCheckingStudent] = useState(false);
+  const [isDownloadingStudent, setIsDownloadingStudent] = useState(false);
+  const [studentPackagePath, setStudentPackagePath] = useState<string | null>(null);
+  const [studentDownloadProgress, setStudentDownloadProgress] = useState<number>(0);
 
   // Get app version from Tauri
   useEffect(() => {
@@ -137,6 +144,20 @@ const UpdatesPage: React.FC = () => {
     };
   }, []);
 
+  // Listen for student package download progress
+  useEffect(() => {
+    const unlisten = listen('student-package-download-progress', (event: any) => {
+      const progress = event.payload;
+      if (progress.percentage !== undefined) {
+        setStudentDownloadProgress(progress.percentage);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   const handleCheckForUpdates = async () => {
     setIsChecking(true);
     try {
@@ -172,47 +193,66 @@ const UpdatesPage: React.FC = () => {
     await handleCheckForUpdates();
   };
 
-  // Start LAN distribution server
-  const handleStartLanServer = async () => {
-    // Try to get updateInfo from state, or fetch from backend
-    let info = updateInfo;
-    
-    if (!info) {
-      // Try to get latest info from backend coordinator
-      try {
-        info = await invoke<UpdateInfo | null>('get_latest_update_info');
-        if (info) {
-          setUpdateInfo(info);
-        }
-      } catch (error) {
-        console.error('Failed to get update info:', error);
+  // Check for Student app updates (for LAN distribution)
+  const handleCheckStudentUpdate = async () => {
+    setIsCheckingStudent(true);
+    try {
+      const info = await invoke<UpdateInfo | null>('check_student_update');
+      if (info) {
+        setStudentUpdateInfo(info);
+        console.log('[UpdatesPage] Student update available:', info.version);
+      } else {
+        alert('Không có bản cập nhật Student app nào.');
       }
+    } catch (error) {
+      console.error('Failed to check student update:', error);
+      alert(`Lỗi kiểm tra cập nhật Student: ${error}`);
+    } finally {
+      setIsCheckingStudent(false);
     }
-    
-    if (!info) {
-      alert('Vui lòng kiểm tra cập nhật trước để lấy thông tin package.\n\nClick "Check Now" để kiểm tra.');
+  };
+
+  // Download Student app package for LAN distribution
+  const handleDownloadStudentPackage = async () => {
+    if (!studentUpdateInfo) {
+      alert('Vui lòng kiểm tra cập nhật Student app trước.');
+      return;
+    }
+
+    setIsDownloadingStudent(true);
+    setStudentDownloadProgress(0);
+    try {
+      const path = await invoke<string>('download_student_package_for_lan', {
+        downloadUrl: studentUpdateInfo.download_url,
+        sha256: studentUpdateInfo.sha256,
+      });
+      setStudentPackagePath(path);
+      console.log('[UpdatesPage] Student package downloaded:', path);
+    } catch (error) {
+      console.error('Failed to download student package:', error);
+      alert(`Lỗi tải Student package: ${error}`);
+    } finally {
+      setIsDownloadingStudent(false);
+    }
+  };
+
+  // Start LAN distribution server with Student package
+  const handleStartLanServer = async () => {
+    // Check if we have Student package downloaded
+    if (!studentPackagePath || !studentUpdateInfo) {
+      alert('Vui lòng tải xuống Student package trước khi khởi động LAN server.\n\n1. Click "Check Student Update" để kiểm tra\n2. Click "Download Student Package" để tải về');
       return;
     }
 
     setIsStartingLan(true);
     try {
-      // Get the download path from the coordinator
-      const downloadPath = await invoke<string | null>('get_update_download_path');
-      console.log('[UpdatesPage] Download path from coordinator:', downloadPath);
-      
-      if (!downloadPath) {
-        alert('Vui lòng tải xuống bản cập nhật trước khi khởi động LAN server.\n\nBản cập nhật phải được tải về máy Teacher trước khi có thể phân phối cho học sinh.');
-        setIsStartingLan(false);
-        return;
-      }
-
-      console.log('[UpdatesPage] Starting LAN server with path:', downloadPath);
+      console.log('[UpdatesPage] Starting LAN server with Student package:', studentPackagePath);
       const url = await invoke<string>('start_lan_distribution', {
-        packagePath: downloadPath,
-        sha256: info.sha256,
+        packagePath: studentPackagePath,
+        sha256: studentUpdateInfo.sha256,
       });
       setLanServerUrl(url);
-      setLanUpdateInfo(info); // Save update info for broadcast
+      setLanUpdateInfo(studentUpdateInfo); // Save Student update info for broadcast
       console.log('[UpdatesPage] LAN server started:', url);
     } catch (error) {
       console.error('Failed to start LAN server:', error);
@@ -531,6 +571,59 @@ const UpdatesPage: React.FC = () => {
               </div>
             </div>
             
+            {/* Student Package Controls */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Check Student Update */}
+              <button
+                onClick={handleCheckStudentUpdate}
+                disabled={isCheckingStudent}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold hover:bg-blue-200 transition disabled:opacity-50"
+              >
+                {isCheckingStudent ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3 h-3" />
+                )}
+                Check Student Update
+              </button>
+
+              {/* Student Update Info */}
+              {studentUpdateInfo && (
+                <span className="text-xs text-slate-600">
+                  Student v{studentUpdateInfo.version}
+                </span>
+              )}
+
+              {/* Download Student Package */}
+              {studentUpdateInfo && !studentPackagePath && (
+                <button
+                  onClick={handleDownloadStudentPackage}
+                  disabled={isDownloadingStudent}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-200 transition disabled:opacity-50"
+                >
+                  {isDownloadingStudent ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      {studentDownloadProgress.toFixed(0)}%
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-3 h-3" />
+                      Download Student Package
+                    </>
+                  )}
+                </button>
+              )}
+
+              {/* Student Package Ready */}
+              {studentPackagePath && (
+                <span className="flex items-center gap-1 text-xs text-green-600 font-bold">
+                  <CheckCircle className="w-3 h-3" />
+                  Student Package Ready
+                </span>
+              )}
+            </div>
+            
             {/* LAN Distribution Controls */}
             <div className="flex items-center gap-3">
               {/* LAN Server Status */}
@@ -545,9 +638,9 @@ const UpdatesPage: React.FC = () => {
               {!lanServerUrl ? (
                 <button
                   onClick={handleStartLanServer}
-                  disabled={isStartingLan || updateState.type !== 'ReadyToInstall'}
+                  disabled={isStartingLan || !studentPackagePath}
                   className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={updateState.type !== 'ReadyToInstall' ? 'Download update first' : 'Start LAN distribution server'}
+                  title={!studentPackagePath ? 'Download Student package first' : 'Start LAN distribution server'}
                 >
                   {isStartingLan ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
