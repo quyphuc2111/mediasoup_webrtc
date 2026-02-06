@@ -479,6 +479,15 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
     };
   }, []);
 
+  // Auto-request keyframe when component mounts with a connectionId
+  // This ensures fast video start when switching views (grid → fullscreen → control)
+  useEffect(() => {
+    if (connectionId) {
+      console.log('[H264Player] Mounted, requesting keyframe for fast start');
+      invoke('send_remote_keyframe_request', { connectionId }).catch(console.error);
+    }
+  }, [connectionId]);
+
   // Fallback for JPEG or when WebCodecs not available or H.264 fails
   if (frame && (frame.codec === 'jpeg' || useFallback)) {
     if (!frame.data) {

@@ -61,7 +61,7 @@ impl H264Encoder {
             width,
             height,
             frame_count: Mutex::new(0),
-            keyframe_interval: 60, // Keyframe every 1 second at 60fps
+            keyframe_interval: 30, // Keyframe every 0.5 second at 60fps
         })
     }
     

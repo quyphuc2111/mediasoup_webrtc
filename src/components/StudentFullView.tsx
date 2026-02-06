@@ -103,6 +103,31 @@ export function StudentFullView({
     }
   }, [isRemoteControlActive]);
 
+  // Auto-restore focus when window regains focus (e.g., after Task Manager)
+  useEffect(() => {
+    if (!isRemoteControlActive) return;
+    
+    const handleWindowFocus = () => {
+      if (keyboardInputRef.current) {
+        keyboardInputRef.current.focus();
+      }
+    };
+    
+    const handleVisibilityChange = () => {
+      if (!document.hidden && keyboardInputRef.current) {
+        keyboardInputRef.current.focus();
+      }
+    };
+    
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isRemoteControlActive]);
+
   // Calculate normalized mouse position
   const getNormalizedPosition = useCallback((e: React.MouseEvent): { x: number; y: number } | null => {
     const container = screenContainerRef.current;

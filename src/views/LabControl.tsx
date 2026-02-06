@@ -195,6 +195,28 @@ const LabControl: React.FC<LabControlProps> = () => {
     }
   }, [remoteControlEnabled]);
 
+  // Auto-restore focus when window regains focus (e.g., after Task Manager)
+  useEffect(() => {
+    if (!remoteControlEnabled) return;
+    
+    const handleWindowFocus = () => {
+      if (keyboardInputRef.current) {
+        keyboardInputRef.current.focus();
+      }
+    };
+    
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && keyboardInputRef.current) {
+        keyboardInputRef.current.focus();
+      }
+    });
+    
+    return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+    };
+  }, [remoteControlEnabled]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -716,13 +738,15 @@ const LabControl: React.FC<LabControlProps> = () => {
     const isViewing = conn?.status === 'Viewing';
 
     return (
-      <div className="fixed inset-0 z-[9999] bg-black flex flex-col overflow-hidden" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}>
+      <div className="fixed inset-0 z-[9999] bg-black flex flex-col overflow-hidden" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
+        onClick={() => keyboardInputRef.current?.focus()}>
         {/* Hidden keyboard input */}
         <input ref={keyboardInputRef} type="text" className="absolute opacity-0 pointer-events-none" 
           onKeyDown={handleKeyDown} onKeyUp={handleKeyUp} tabIndex={-1} />
 
         {/* Header - fixed height */}
-        <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-800">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 bg-slate-900 border-b border-slate-800"
+          onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-4">
             <h2 className="text-lg font-black text-white">{selectedComputer.computerName}</h2>
             <span className="text-sm text-slate-400 font-mono">{selectedComputer.ipAddress}</span>
