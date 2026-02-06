@@ -95,6 +95,7 @@ const LabControl: React.FC<LabControlProps> = () => {
   const [connections, setConnections] = useState<StudentConnection[]>([]);
   const [screenFrames, setScreenFrames] = useState<Record<string, ScreenFrame>>({});
   const [isConnectingAll, setIsConnectingAll] = useState(false);
+  const [screenStatuses, setScreenStatuses] = useState<Record<string, { status: string; message?: string }>>({});
 
   // Fullscreen/Control modal state
   const [activeViewMode, setActiveViewMode] = useState<ViewMode>('grid');
@@ -150,6 +151,29 @@ const LabControl: React.FC<LabControlProps> = () => {
       unlisten = await listen<[string, ScreenFrame]>('screen-frame', (event) => {
         const [connId, frame] = event.payload;
         setScreenFrames(prev => ({ ...prev, [connId]: frame }));
+      });
+    };
+    setupListener();
+    return () => { if (unlisten) unlisten(); };
+  }, []);
+
+  // Listen for screen status changes (login screen detection)
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    const setupListener = async () => {
+      unlisten = await listen<{ studentId: string; status: string; message?: string }>('student-screen-status', (event) => {
+        const { studentId, status, message } = event.payload;
+        console.log(`[LabControl] Screen status for ${studentId}: ${status} - ${message}`);
+        if (status === 'capturing') {
+          // Screen capture resumed — clear the status
+          setScreenStatuses(prev => {
+            const next = { ...prev };
+            delete next[studentId];
+            return next;
+          });
+        } else {
+          setScreenStatuses(prev => ({ ...prev, [studentId]: { status, message } }));
+        }
       });
     };
     setupListener();
@@ -554,6 +578,20 @@ const LabControl: React.FC<LabControlProps> = () => {
                 }}
               >
                 <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
+                {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white">
+                    <Lock className="w-16 h-16 mb-4 text-amber-400" />
+                    <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
+                    <span className="text-sm text-slate-400 mt-2">Không thể capture Secure Desktop</span>
+                    <span className="text-sm text-slate-400">Sử dụng Remote Login để đăng nhập từ xa</span>
+                  </div>
+                )}
+              </div>
+            ) : isViewing && conn && screenStatuses[conn.id]?.status === 'login_screen' ? (
+              <div className="flex flex-col items-center justify-center text-white">
+                <Lock className="w-16 h-16 mb-4 text-amber-400" />
+                <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
+                <span className="text-sm text-slate-400 mt-2">Sử dụng Remote Login để đăng nhập từ xa</span>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center text-white">
@@ -622,6 +660,19 @@ const LabControl: React.FC<LabControlProps> = () => {
                 onWheel={handleWheel}
               >
                 <H264VideoPlayer frame={frame} className="w-full h-full object-contain pointer-events-none" connectionId={conn!.id} />
+                {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white pointer-events-none">
+                    <Lock className="w-16 h-16 mb-4 text-amber-400" />
+                    <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
+                    <span className="text-sm text-slate-400 mt-2">Không thể capture Secure Desktop</span>
+                  </div>
+                )}
+              </div>
+            ) : isViewing && conn && screenStatuses[conn.id]?.status === 'login_screen' ? (
+              <div className="flex flex-col items-center justify-center text-white">
+                <Lock className="w-16 h-16 mb-4 text-amber-400" />
+                <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
+                <span className="text-sm text-slate-400 mt-2">Sử dụng Remote Login để đăng nhập từ xa</span>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center text-white">
@@ -739,7 +790,21 @@ const LabControl: React.FC<LabControlProps> = () => {
                 {/* Screen Preview */}
                 <div className="relative aspect-video bg-slate-900 overflow-hidden cursor-pointer" onClick={() => isViewing && openFullscreen(pc)}>
                   {isViewing && frame ? (
-                    <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
+                    <>
+                      <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
+                      {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white">
+                          <Lock className="w-8 h-8 mb-2 text-amber-400" />
+                          <span className="text-xs font-medium text-amber-300">Màn hình đăng nhập</span>
+                        </div>
+                      )}
+                    </>
+                  ) : isViewing && conn && screenStatuses[conn.id]?.status === 'login_screen' ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                      <Lock className="w-8 h-8 mb-2 text-amber-400" />
+                      <span className="text-xs font-medium text-amber-300">Màn hình đăng nhập</span>
+                      <span className="text-[10px] text-slate-400 mt-1">Dùng Remote Login để đăng nhập</span>
+                    </div>
                   ) : isViewing ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
                       <Loader2 className="w-8 h-8 animate-spin mb-2 text-indigo-400" />

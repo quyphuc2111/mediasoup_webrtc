@@ -206,6 +206,13 @@ pub enum StudentMessage {
     #[serde(rename = "screen_stopped")]
     ScreenStopped,
 
+    /// Screen status notification (e.g., login screen detected)
+    #[serde(rename = "screen_status")]
+    ScreenStatus {
+        status: String, // "login_screen", "capturing", "error"
+        message: Option<String>,
+    },
+
     #[serde(rename = "pong")]
     Pong,
 
@@ -450,10 +457,20 @@ async fn handle_connection(
             }
             // Handle screen frames - send as binary for efficiency
             // Frame format: [1 byte type] [8 bytes timestamp] [4 bytes width] [4 bytes height] [H.264 data]
+            // Special: if first byte is 0xFF, it's a JSON status message (not a video frame)
             Some(frame_data) = frame_rx.recv() => {
-                // Send as binary WebSocket message (already formatted by capture loop)
-                if let Err(e) = write.send(Message::Binary(frame_data)).await {
-                    log::error!("[StudentAgent] Failed to send frame: {}", e);
+                if frame_data.first() == Some(&0xFF) {
+                    // Status message — send as text WebSocket message
+                    if let Ok(text) = String::from_utf8(frame_data[1..].to_vec()) {
+                        if let Err(e) = write.send(Message::Text(text)).await {
+                            log::error!("[StudentAgent] Failed to send status: {}", e);
+                        }
+                    }
+                } else {
+                    // Send as binary WebSocket message (already formatted by capture loop)
+                    if let Err(e) = write.send(Message::Binary(frame_data)).await {
+                        log::error!("[StudentAgent] Failed to send frame: {}", e);
+                    }
                 }
             }
             // Handle shutdown signal
@@ -941,6 +958,8 @@ fn start_screen_capture(
 
         let start_time = std::time::Instant::now();
         let mut frame_count: u64 = 0;
+        let mut consecutive_failures: u32 = 0;
+        let mut login_screen_notified = false;
 
         while !stop_flag.load(Ordering::Relaxed) {
             let loop_start = std::time::Instant::now();
@@ -956,6 +975,29 @@ fn start_screen_capture(
 
             match screen_capture::capture_monitor_raw(monitor) {
                 Ok(raw_frame) => {
+                    // Reset failure counter on successful capture
+                    if consecutive_failures > 0 {
+                        crate::log_debug(
+                            "info",
+                            &format!("[ScreenCapture] Capture recovered after {} failures", consecutive_failures),
+                        );
+                        consecutive_failures = 0;
+                    }
+                    if login_screen_notified {
+                        login_screen_notified = false;
+                        // Send "capturing" status to notify teacher we're back
+                        let status_msg = serde_json::to_string(
+                            &crate::student_agent::StudentMessage::ScreenStatus {
+                                status: "capturing".to_string(),
+                                message: Some("Screen capture resumed".to_string()),
+                            },
+                        ).unwrap_or_default();
+                        let mut status_frame = Vec::with_capacity(1 + status_msg.len());
+                        status_frame.push(0xFF); // Marker byte for status message
+                        status_frame.extend_from_slice(status_msg.as_bytes());
+                        let _ = frame_tx_clone.try_send(status_frame);
+                    }
+
                     let timestamp = start_time.elapsed().as_millis() as u64;
 
                     // Encode to H.264 (encoder will auto-update dimensions if needed)
@@ -1010,7 +1052,32 @@ fn start_screen_capture(
                     }
                 }
                 Err(e) => {
-                    eprintln!("[ScreenCapture] Capture error: {}", e);
+                    consecutive_failures += 1;
+                    eprintln!("[ScreenCapture] Capture error ({}x): {}", consecutive_failures, e);
+                    
+                    // After 10 consecutive failures, likely on Secure Desktop (login screen)
+                    if consecutive_failures >= 10 && !login_screen_notified {
+                        login_screen_notified = true;
+                        crate::log_debug(
+                            "warn",
+                            "[ScreenCapture] Consecutive capture failures - likely on Windows login screen",
+                        );
+                        // Send login_screen status to teacher
+                        let status_msg = serde_json::to_string(
+                            &crate::student_agent::StudentMessage::ScreenStatus {
+                                status: "login_screen".to_string(),
+                                message: Some("Máy đang ở màn hình đăng nhập Windows".to_string()),
+                            },
+                        ).unwrap_or_default();
+                        let mut status_frame = Vec::with_capacity(1 + status_msg.len());
+                        status_frame.push(0xFF); // Marker byte for status message
+                        status_frame.extend_from_slice(status_msg.as_bytes());
+                        let _ = frame_tx_clone.try_send(status_frame);
+                    }
+                    
+                    // Sleep longer during failures to avoid busy-looping
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    continue;
                 }
             }
 

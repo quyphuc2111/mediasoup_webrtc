@@ -39,8 +39,8 @@
 
   ; Firewall for the service too
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService"'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService" dir=in action=allow program="$INSTDIR\resources\smartlab-service.exe" enable=yes profile=any'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService Out" dir=out action=allow program="$INSTDIR\resources\smartlab-service.exe" enable=yes profile=any'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService" dir=in action=allow program="$INSTDIR\binaries\smartlab-service.exe" enable=yes profile=any'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService Out" dir=out action=allow program="$INSTDIR\binaries\smartlab-service.exe" enable=yes profile=any'
   DetailPrint "Added Windows Firewall exceptions"
 
   ; ============================================================
@@ -49,10 +49,10 @@
   ; ============================================================
 
   ; Stop and remove old service if exists
-  nsExec::ExecToLog '"$INSTDIR\resources\smartlab-service.exe" --uninstall'
+  nsExec::ExecToLog '"$INSTDIR\binaries\smartlab-service.exe" --uninstall'
 
   ; Install the service
-  nsExec::ExecToLog '"$INSTDIR\resources\smartlab-service.exe" --install'
+  nsExec::ExecToLog '"$INSTDIR\binaries\smartlab-service.exe" --install'
   Pop $0
   StrCmp $0 "0" svc_installed
     DetailPrint "Warning: Could not install SmartlabService"
@@ -76,7 +76,7 @@
   nsExec::ExecToLog 'sc stop SmartlabService'
   ; Wait for service to stop
   Sleep 2000
-  nsExec::ExecToLog '"$INSTDIR\resources\smartlab-service.exe" --uninstall'
+  nsExec::ExecToLog '"$INSTDIR\binaries\smartlab-service.exe" --uninstall'
   DetailPrint "SmartlabService uninstalled"
 
   ; Remove registry keys

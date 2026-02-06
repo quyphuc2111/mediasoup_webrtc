@@ -1934,6 +1934,181 @@ async fn install_student_update(
     Ok(())
 }
 
+/// Ensure SmartlabService (Windows Service) is installed and running.
+/// The service runs at boot level on port 3019, allowing teacher to connect
+/// even before user login. If the service is not installed or not running,
+/// this function will attempt to fix it.
+#[cfg(windows)]
+fn ensure_smartlab_service_running(app: &AppHandle) {
+    use std::os::windows::process::CommandExt;
+
+    log::info!("[SmartlabService] Checking service status...");
+
+    // Step 1: Check if service is running via sc query
+    let status = Command::new("sc")
+        .args(["query", "SmartlabService"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output();
+
+    match status {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            
+            if !output.status.success() {
+                // sc query returns non-zero when service doesn't exist
+                log::info!("[SmartlabService] Service not installed (sc query failed)");
+            } else if stdout.contains("RUNNING") {
+                log::info!("[SmartlabService] Service is already running");
+                return;
+            } else if stdout.contains("STOPPED") || stdout.contains("STOP_PENDING") {
+                // Service is installed but stopped — try to start it
+                log::info!("[SmartlabService] Service is stopped, attempting to start...");
+                let start_result = Command::new("sc")
+                    .args(["start", "SmartlabService"])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .creation_flags(0x08000000)
+                    .output();
+
+                match start_result {
+                    Ok(out) if out.status.success() => {
+                        log::info!("[SmartlabService] Service started successfully");
+                        return;
+                    }
+                    Ok(out) => {
+                        let err = String::from_utf8_lossy(&out.stderr);
+                        log::warn!("[SmartlabService] Failed to start service: {}", err);
+                        // Fall through to try console mode
+                    }
+                    Err(e) => {
+                        log::warn!("[SmartlabService] Failed to run sc start: {}", e);
+                    }
+                }
+            } else {
+                // Service exists but in unknown state
+                log::warn!("[SmartlabService] Service in unexpected state: {}", stdout.trim());
+            }
+        }
+        Err(_) => {
+            // sc command failed — service likely not installed
+            log::info!("[SmartlabService] Service not found, attempting to install...");
+        }
+    }
+
+    // Step 2: Try to find the service executable
+    let service_exe = find_service_executable(app);
+
+    if let Some(exe_path) = service_exe {
+        log::info!("[SmartlabService] Found service at: {:?}", exe_path);
+
+        // Step 3: Try to install the service (requires admin)
+        let install_result = Command::new(&exe_path)
+            .arg("--install")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(0x08000000)
+            .output();
+
+        match install_result {
+            Ok(out) if out.status.success() => {
+                log::info!("[SmartlabService] Service installed successfully");
+
+                // Start the service
+                let _ = Command::new("sc")
+                    .args(["start", "SmartlabService"])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .creation_flags(0x08000000)
+                    .output();
+
+                log::info!("[SmartlabService] Service start command sent");
+                return;
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                log::warn!("[SmartlabService] Install failed (may need admin): {}", err);
+            }
+            Err(e) => {
+                log::warn!("[SmartlabService] Failed to run install: {}", e);
+            }
+        }
+
+        // Step 4: Fallback — run in console mode (no admin needed, runs as background process)
+        log::info!("[SmartlabService] Falling back to console mode...");
+        match Command::new(&exe_path)
+            .arg("--console")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x08000000)
+            .spawn()
+        {
+            Ok(_child) => {
+                log::info!("[SmartlabService] Running in console mode (fallback)");
+            }
+            Err(e) => {
+                log::error!("[SmartlabService] Failed to start in console mode: {}", e);
+            }
+        }
+    } else {
+        log::error!("[SmartlabService] Service executable not found");
+    }
+}
+
+/// Find the smartlab-service.exe in known locations
+#[cfg(windows)]
+fn find_service_executable(app: &AppHandle) -> Option<PathBuf> {
+    // 1. Check next to the main executable (same directory)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let path = exe_dir.join("smartlab-service.exe");
+            if path.exists() {
+                return Some(path);
+            }
+            // Check binaries subfolder
+            let path = exe_dir.join("binaries").join("smartlab-service.exe");
+            if path.exists() {
+                return Some(path);
+            }
+            // Check resources subfolder
+            let path = exe_dir.join("resources").join("smartlab-service.exe");
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    // 2. Check in Tauri resource directory
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let path = resource_dir.join("smartlab-service.exe");
+        if path.exists() {
+            return Some(path);
+        }
+        let path = resource_dir.join("binaries").join("smartlab-service.exe");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // 3. Check Program Files (common install locations)
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        let base = PathBuf::from(&pf).join("SmartlabStudent");
+        for subfolder in &["binaries", "resources", ""] {
+            let path = if subfolder.is_empty() {
+                base.join("smartlab-service.exe")
+            } else {
+                base.join(subfolder).join("smartlab-service.exe")
+            };
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1959,6 +2134,12 @@ pub fn run() {
                     log::error!("[Setup] Failed to setup system tray: {}", e);
                 } else {
                     log::info!("[Setup] System tray initialized successfully");
+                }
+                
+                // Ensure SmartlabService is installed and running (Windows only)
+                #[cfg(windows)]
+                {
+                    ensure_smartlab_service_running(app.handle());
                 }
                 
                 // Auto-register autostart on first run (like Veyon/NetSupport)

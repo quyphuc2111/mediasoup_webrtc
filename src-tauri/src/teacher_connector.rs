@@ -102,6 +102,13 @@ pub enum StudentMessage {
     #[serde(rename = "screen_stopped")]
     ScreenStopped,
 
+    /// Screen status notification (e.g., login screen detected)
+    #[serde(rename = "screen_status")]
+    ScreenStatus {
+        status: String,
+        message: Option<String>,
+    },
+
     #[serde(rename = "pong")]
     Pong,
 
@@ -782,7 +789,7 @@ async fn handle_connection(
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(e) = handle_student_message(&text, &state, &id).await {
+                        if let Err(e) = handle_student_message(&text, &state, &id, &app_handle).await {
                             log::error!("[TeacherConnector] Error: {}", e);
                         }
                     }
@@ -1056,6 +1063,7 @@ async fn handle_student_message(
     text: &str,
     state: &Arc<ConnectorState>,
     id: &str,
+    app_handle: &Option<AppHandle>,
 ) -> Result<(), String> {
     let msg: StudentMessage =
         serde_json::from_str(text).map_err(|e| format!("Invalid message: {}", e))?;
@@ -1110,6 +1118,18 @@ async fn handle_student_message(
             }
 
             state.update_status(id, ConnectionStatus::Connected);
+        }
+        StudentMessage::ScreenStatus { status, message } => {
+            log::info!("[TeacherConnector] Screen status from {}: {} - {:?}", id, status, message);
+            
+            // Emit event to frontend so UI can show appropriate state
+            if let Some(ref app) = app_handle {
+                let _ = app.emit("student-screen-status", serde_json::json!({
+                    "studentId": id,
+                    "status": status,
+                    "message": message,
+                }));
+            }
         }
         StudentMessage::Error { message } => {
             println!("[TeacherConnector] Error from student: {}", message);
