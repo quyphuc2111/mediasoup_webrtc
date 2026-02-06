@@ -42,31 +42,6 @@ pub fn register_autostart() -> Result<(), String> {
     { Ok(()) }
 }
 
-/// Enable Windows Auto-Logon for current user (no password required at boot)
-/// This allows the student app to start automatically even after a reboot
-pub fn enable_auto_logon() -> Result<String, String> {
-    #[cfg(target_os = "windows")]
-    { return enable_auto_logon_windows(); }
-    #[cfg(not(target_os = "windows"))]
-    { Err("Auto-logon is only supported on Windows".to_string()) }
-}
-
-/// Disable Windows Auto-Logon
-pub fn disable_auto_logon() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    { return disable_auto_logon_windows(); }
-    #[cfg(not(target_os = "windows"))]
-    { Err("Auto-logon is only supported on Windows".to_string()) }
-}
-
-/// Check if Windows Auto-Logon is enabled
-pub fn is_auto_logon_enabled() -> bool {
-    #[cfg(target_os = "windows")]
-    { return is_auto_logon_enabled_windows(); }
-    #[cfg(not(target_os = "windows"))]
-    { false }
-}
-
 
 // ============================================================
 // Windows Implementation
@@ -75,27 +50,30 @@ pub fn is_auto_logon_enabled() -> bool {
 #[cfg(target_os = "windows")]
 fn is_autostart_configured_windows() -> bool {
     use std::process::Command;
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let name = get_product_name();
 
-    // Check if scheduled task exists
     if let Ok(output) = Command::new("schtasks")
         .args(["/Query", "/TN", &name])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
         if output.status.success() { return true; }
     }
 
-    // Check HKLM registry
     if let Ok(output) = Command::new("reg")
         .args(["query", r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run", "/v", &name])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
         if output.status.success() { return true; }
     }
 
-    // Check HKCU registry
     if let Ok(output) = Command::new("reg")
         .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run", "/v", &name])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
         if output.status.success() { return true; }
@@ -107,6 +85,9 @@ fn is_autostart_configured_windows() -> bool {
 #[cfg(target_os = "windows")]
 fn register_autostart_windows() -> Result<(), String> {
     use std::process::Command;
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let exe_path = get_exe_path()?;
     let exe_str = exe_path.to_string_lossy();
@@ -119,6 +100,7 @@ fn register_autostart_windows() -> Result<(), String> {
         .args(["add", r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run",
                "/v", &name, "/t", "REG_SZ",
                "/d", &format!("\"{}\"", exe_str), "/f"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -130,6 +112,7 @@ fn register_autostart_windows() -> Result<(), String> {
             .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                    "/v", &name, "/t", "REG_SZ",
                    "/d", &format!("\"{}\"", exe_str), "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
@@ -141,12 +124,16 @@ fn register_autostart_windows() -> Result<(), String> {
     }
 
     // 2. Scheduled Task (like Veyon)
-    let _ = Command::new("schtasks").args(["/Delete", "/TN", &name, "/F"]).output();
+    let _ = Command::new("schtasks")
+        .args(["/Delete", "/TN", &name, "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
 
     let task_ok = Command::new("schtasks")
         .args(["/Create", "/TN", &name,
                "/TR", &format!("\"{}\"", exe_str),
                "/SC", "ONLOGON", "/RL", "HIGHEST", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -158,6 +145,7 @@ fn register_autostart_windows() -> Result<(), String> {
             .args(["/Create", "/TN", &name,
                    "/TR", &format!("\"{}\"", exe_str),
                    "/SC", "ONLOGON", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
@@ -171,99 +159,23 @@ fn register_autostart_windows() -> Result<(), String> {
     // 3. Firewall rules
     let _ = Command::new("netsh")
         .args(["advfirewall", "firewall", "delete", "rule", &format!("name={}", name)])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     let _ = Command::new("netsh")
         .args(["advfirewall", "firewall", "add", "rule",
                &format!("name={}", name), "dir=in", "action=allow",
                &format!("program={}", exe_str), "enable=yes", "profile=any"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     let _ = Command::new("netsh")
         .args(["advfirewall", "firewall", "add", "rule",
                &format!("name={} Out", name), "dir=out", "action=allow",
                &format!("program={}", exe_str), "enable=yes", "profile=any"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
     log::info!("[Autostart] Firewall rules configured");
 
     Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn enable_auto_logon_windows() -> Result<String, String> {
-    use std::process::Command;
-
-    // Get current username
-    let username = std::env::var("USERNAME")
-        .unwrap_or_else(|_| "Student".to_string());
-
-    log::info!("[AutoLogon] Enabling auto-logon for user: {}", username);
-
-    // Set AutoAdminLogon = 1
-    let _ = Command::new("reg")
-        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "AutoAdminLogon", "/t", "REG_SZ", "/d", "1", "/f"])
-        .output()
-        .map_err(|e| format!("Failed to set AutoAdminLogon: {}", e))?;
-
-    // Set DefaultUserName
-    let _ = Command::new("reg")
-        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "DefaultUserName", "/t", "REG_SZ", "/d", &username, "/f"])
-        .output()
-        .map_err(|e| format!("Failed to set DefaultUserName: {}", e))?;
-
-    // Set empty DefaultPassword (removes password requirement)
-    let _ = Command::new("reg")
-        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "DefaultPassword", "/t", "REG_SZ", "/d", "", "/f"])
-        .output()
-        .map_err(|e| format!("Failed to set DefaultPassword: {}", e))?;
-
-    // Clear domain for local accounts
-    let _ = Command::new("reg")
-        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "DefaultDomainName", "/t", "REG_SZ", "/d", "", "/f"])
-        .output();
-
-    log::info!("[AutoLogon] Auto-logon enabled for: {}", username);
-    Ok(username)
-}
-
-#[cfg(target_os = "windows")]
-fn disable_auto_logon_windows() -> Result<(), String> {
-    use std::process::Command;
-
-    log::info!("[AutoLogon] Disabling auto-logon");
-
-    let _ = Command::new("reg")
-        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "AutoAdminLogon", "/t", "REG_SZ", "/d", "0", "/f"])
-        .output()
-        .map_err(|e| format!("Failed to disable AutoAdminLogon: {}", e))?;
-
-    // Remove stored password
-    let _ = Command::new("reg")
-        .args(["delete", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "DefaultPassword", "/f"])
-        .output();
-
-    log::info!("[AutoLogon] Auto-logon disabled");
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn is_auto_logon_enabled_windows() -> bool {
-    use std::process::Command;
-
-    let output = Command::new("reg")
-        .args(["query", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
-               "/v", "AutoAdminLogon"])
-        .output();
-
-    if let Ok(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return stdout.contains("0x1") || stdout.contains("    1");
-    }
-    false
 }
 
 
