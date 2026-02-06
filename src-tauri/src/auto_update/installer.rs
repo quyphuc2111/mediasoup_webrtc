@@ -107,6 +107,9 @@ impl InstallerRunner {
     /// Uses ShellExecuteW with "runas" verb to trigger UAC prompt
     #[cfg(target_os = "windows")]
     fn run_elevated(exe_path: &str, args: &[&str]) -> IoResult<std::process::Output> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        
         // For elevated execution, we need to use a different approach
         // Since ShellExecuteW doesn't give us output, we'll use a workaround:
         // Run the installer and wait for it to complete
@@ -127,6 +130,7 @@ impl InstallerRunner {
         
         Command::new("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps_command])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
     }
 
@@ -211,6 +215,9 @@ impl InstallerRunner {
         installer_path: &Path,
         installer_type: InstallerType,
     ) -> Result<(), InstallError> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         // Validate installer path
         if !installer_path.exists() {
             return Err(InstallError::InstallerNotFound(
@@ -233,6 +240,7 @@ impl InstallerRunner {
                     .arg("/i")
                     .arg(installer_path_str)
                     .args(installer_type.silent_args())
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
             }
             InstallerType::NsisExe => {
@@ -244,6 +252,7 @@ impl InstallerRunner {
                 // First try without elevation (works for per-user installers)
                 let result = Command::new(installer_path_str)
                     .arg("/S")
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output();
                 
                 match &result {
@@ -273,6 +282,7 @@ impl InstallerRunner {
                 log::info!("[Installer] Running Inno Setup installer");
                 Command::new(installer_path_str)
                     .args(installer_type.silent_args())
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
             }
             _ => {
@@ -280,6 +290,7 @@ impl InstallerRunner {
                 log::info!("[Installer] Running generic EXE installer");
                 Command::new(installer_path_str)
                     .args(installer_type.silent_args())
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
             }
         };
@@ -515,9 +526,12 @@ impl InstallerRunner {
     /// * `Err(InstallError)` - Failed to schedule restart
     #[cfg(target_os = "windows")]
     pub fn schedule_restart(delay_seconds: u32) -> Result<(), InstallError> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         // Use Windows shutdown command with restart flag
         let output = Command::new("shutdown")
             .args(["/r", "/t", &delay_seconds.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
 
         match output {

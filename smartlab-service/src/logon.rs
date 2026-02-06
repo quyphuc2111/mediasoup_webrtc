@@ -82,6 +82,8 @@ pub fn logon_user(username: &str, password: &str, domain: Option<&str>) -> Resul
 /// Activate the user's desktop session after LogonUser
 fn activate_user_session(username: &str, _token: &HANDLE) -> Result<(), String> {
     use std::process::Command;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     // Method 1: If user already has a disconnected session, reconnect it
     if let Some(session_id) = find_user_session(username) {
@@ -89,6 +91,7 @@ fn activate_user_session(username: &str, _token: &HANDLE) -> Result<(), String> 
 
         let result = Command::new("tscon")
             .args([&session_id.to_string(), "/dest:console"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
 
         match result {
@@ -121,13 +124,18 @@ fn activate_user_session(username: &str, _token: &HANDLE) -> Result<(), String> 
 /// then clears the credentials for security
 fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
     use std::process::Command;
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     // We don't store the password in registry for security
     // Instead, we use a different approach: simulate SAS (Secure Attention Sequence)
     // to dismiss the lock screen, since LogonUser already created the token
     
     // Method A: Use "tsdiscon" to cycle the console session
-    let _ = Command::new("tsdiscon").arg("console").output();
+    let _ = Command::new("tsdiscon")
+        .arg("console")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Check if session appeared after tsdiscon
@@ -135,6 +143,7 @@ fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
         log::info!("[Logon] Found session {} after tsdiscon, connecting", session_id);
         let result = Command::new("tscon")
             .args([&session_id.to_string(), "/dest:console"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         if let Ok(output) = result {
             if output.status.success() {
@@ -168,6 +177,7 @@ fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
             }
             "#
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output();
 
     match sas_result {
@@ -190,6 +200,7 @@ fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
         log::info!("[Logon] Session {} found, connecting to console", session_id);
         let _ = Command::new("tscon")
             .args([&session_id.to_string(), "/dest:console"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
 

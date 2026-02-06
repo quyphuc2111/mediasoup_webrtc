@@ -1429,6 +1429,8 @@ fn kill_port_holder(port: u16) {
 
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         // PowerShell command to find process ID by port and kill it, EXCEPT current PID
         // Get-NetTCPConnection finds the connection, .OwningProcess gets PID
         // Where-Object filters out current PID
@@ -1441,6 +1443,7 @@ fn kill_port_holder(port: u16) {
         );
         let _ = std::process::Command::new("powershell")
             .args(&["-NoProfile", "-Command", &cmd])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
     }
 
@@ -1628,8 +1631,11 @@ fn execute_shutdown() {
     
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let _ = std::process::Command::new("shutdown")
             .args(&["/s", "/t", "0"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
     
@@ -1654,8 +1660,11 @@ fn execute_restart() {
     
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let _ = std::process::Command::new("shutdown")
             .args(&["/r", "/t", "0"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
     
@@ -1680,8 +1689,11 @@ fn execute_lock_screen() -> Result<String, String> {
     
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let result = std::process::Command::new("rundll32.exe")
             .args(&["user32.dll,LockWorkStation"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         
         match result {
@@ -1730,8 +1742,11 @@ fn execute_logout() {
     
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
         let _ = std::process::Command::new("shutdown")
             .args(&["/l"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
     
