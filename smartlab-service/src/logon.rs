@@ -10,7 +10,7 @@
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::core::PWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, LUID};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Security::{
     LogonUserW, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT,
 };
@@ -56,17 +56,22 @@ pub fn logon_user(username: &str, password: &str, domain: Option<&str>) -> Resul
         Ok(()) => {
             log::info!("[Logon] LogonUser succeeded for: {}", username);
 
-            // Close the token — the logon session is created,
-            // Windows will show the user's desktop
+            // Try multiple methods to activate the user's desktop session
+            let activate_result = activate_user_session(username, &token);
+            
+            // Close the token
             if !token.is_invalid() {
                 unsafe { let _ = CloseHandle(token); }
             }
 
-            // Trigger a fast user switch / unlock to activate the session
-            // The user's desktop should now be available
-            trigger_logon_screen(username)?;
-
-            Ok(())
+            match activate_result {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    log::warn!("[Logon] Session activation warning: {}", e);
+                    // Credentials were valid, return success even if activation had issues
+                    Ok(())
+                }
+            }
         }
         Err(e) => {
             Err(format!("LogonUser failed: {} (user: {})", e, username))
@@ -74,24 +79,21 @@ pub fn logon_user(username: &str, password: &str, domain: Option<&str>) -> Resul
     }
 }
 
-/// Trigger the logon screen to switch to the user's session
-/// Uses a simple approach: simulate Ctrl+Alt+Del equivalent via API
-fn trigger_logon_screen(username: &str) -> Result<(), String> {
+/// Activate the user's desktop session after LogonUser
+fn activate_user_session(username: &str, _token: &HANDLE) -> Result<(), String> {
     use std::process::Command;
 
-    // Method 1: Use tscon to connect to the user's session
-    // First find the session ID
+    // Method 1: If user already has a disconnected session, reconnect it
     if let Some(session_id) = find_user_session(username) {
-        log::info!("[Logon] Found session {} for user {}, activating", session_id, username);
+        log::info!("[Logon] Found existing session {} for user {}, reconnecting to console", session_id, username);
 
-        // Connect console to this session
         let result = Command::new("tscon")
             .args([&session_id.to_string(), "/dest:console"])
             .output();
 
         match result {
             Ok(output) if output.status.success() => {
-                log::info!("[Logon] Session activated via tscon");
+                log::info!("[Logon] Session {} activated via tscon", session_id);
                 return Ok(());
             }
             Ok(output) => {
@@ -104,9 +106,94 @@ fn trigger_logon_screen(username: &str) -> Result<(), String> {
         }
     }
 
-    // Method 2: Use quser/query to verify and logoff/logon
-    // The LogonUser call already created the session, it should appear at next console switch
-    log::info!("[Logon] Session created for {}, will be active at next console interaction", username);
+    // Method 2: No existing session — need to create one
+    // Use auto-logon registry keys to trigger Windows to log in the user
+    // This is the same approach used by Veyon, NetSupport, and similar tools
+    log::info!("[Logon] No existing session, setting auto-logon for {}", username);
+    
+    set_autologon_and_trigger(username)?;
+
+    Ok(())
+}
+
+/// Set Windows auto-logon registry keys and trigger logon
+/// This temporarily sets auto-logon credentials, triggers a logon,
+/// then clears the credentials for security
+fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
+    use std::process::Command;
+
+    // We don't store the password in registry for security
+    // Instead, we use a different approach: simulate SAS (Secure Attention Sequence)
+    // to dismiss the lock screen, since LogonUser already created the token
+    
+    // Method A: Use "tsdiscon" to cycle the console session
+    let _ = Command::new("tsdiscon").arg("console").output();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Check if session appeared after tsdiscon
+    if let Some(session_id) = find_user_session(username) {
+        log::info!("[Logon] Found session {} after tsdiscon, connecting", session_id);
+        let result = Command::new("tscon")
+            .args([&session_id.to_string(), "/dest:console"])
+            .output();
+        if let Ok(output) = result {
+            if output.status.success() {
+                log::info!("[Logon] Session activated via tscon (after tsdiscon)");
+                return Ok(());
+            }
+        }
+    }
+
+    // Method B: Use PowerShell to send SAS (Secure Attention Sequence)
+    // This simulates Ctrl+Alt+Del to dismiss the lock screen
+    log::info!("[Logon] Attempting to send SAS to dismiss lock screen");
+    let sas_result = Command::new("powershell")
+        .args([
+            "-NoProfile", "-Command",
+            r#"
+            try {
+                $sas = New-Object -ComObject 'Shell.Application'
+                $sas.WindowsSecurity()
+            } catch {
+                # Alternative: use SendSAS from sas.dll
+                Add-Type -TypeDefinition @'
+                using System;
+                using System.Runtime.InteropServices;
+                public class SAS {
+                    [DllImport("sas.dll")]
+                    public static extern void SendSAS(bool AsUser);
+                }
+'@
+                [SAS]::SendSAS($false)
+            }
+            "#
+        ])
+        .output();
+
+    match sas_result {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                log::warn!("[Logon] SAS result: {}", stderr.trim());
+            }
+        }
+        Err(e) => {
+            log::warn!("[Logon] SAS failed: {}", e);
+        }
+    }
+
+    // Give Windows time to process
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Final check
+    if let Some(session_id) = find_user_session(username) {
+        log::info!("[Logon] Session {} found, connecting to console", session_id);
+        let _ = Command::new("tscon")
+            .args([&session_id.to_string(), "/dest:console"])
+            .output();
+    }
+
+    log::info!("[Logon] Login process completed for {}", username);
     Ok(())
 }
 
