@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::time::Duration;
 
+/// Discovery port — shared between teacher scan and student responder
+pub const DISCOVERY_PORT: u16 = 3018;
+
+/// Student agent WebSocket port
+pub const STUDENT_AGENT_PORT: u16 = 3017;
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct DiscoveredDevice {
     pub ip: String,
@@ -10,312 +16,304 @@ pub struct DiscoveredDevice {
     pub last_seen: u64,
 }
 
-pub fn get_local_network_range() -> Result<(Ipv4Addr, Ipv4Addr), String> {
-    // Get local IP
-    let socket =
-        UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("Failed to bind socket: {}", e))?;
-
-    socket
-        .connect("8.8.8.8:80")
-        .map_err(|e| format!("Failed to connect: {}", e))?;
-
-    let local_addr = socket
-        .local_addr()
-        .map_err(|e| format!("Failed to get local address: {}", e))?;
-
-    if let IpAddr::V4(ipv4) = local_addr.ip() {
-        let octets = ipv4.octets();
-        // Assume /24 subnet (255.255.255.0)
-        let network_start = Ipv4Addr::new(octets[0], octets[1], octets[2], 1);
-        let network_end = Ipv4Addr::new(octets[0], octets[1], octets[2], 254);
-        Ok((network_start, network_end))
-    } else {
-        Err("IPv6 not supported".to_string())
+fn get_local_ip() -> Option<Ipv4Addr> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) => Some(ip),
+        _ => None,
     }
 }
 
+/// Get all broadcast addresses to try (subnet + global)
+fn get_broadcast_addresses(port: u16) -> Vec<String> {
+    let mut addrs = vec![format!("255.255.255.255:{}", port)];
+    if let Some(ip) = get_local_ip() {
+        let o = ip.octets();
+        addrs.push(format!("{}.{}.{}.255:{}", o[0], o[1], o[2], port));
+    }
+    addrs
+}
+
+
+// ============================================================
+// Teacher side: Scan for students
+// ============================================================
+
+/// Discover student devices on the LAN.
+/// Sends UDP broadcast and also tries direct TCP probe on known port.
 pub fn discover_devices(port: u16, timeout_ms: u64) -> Result<Vec<DiscoveredDevice>, String> {
     let mut devices = Vec::new();
 
-    // Create discovery socket
     let socket = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| format!("Failed to bind discovery socket: {}", e))?;
-
-    // Set socket to non-blocking for better control
-    socket
-        .set_nonblocking(false)
-        .map_err(|e| format!("Failed to set socket mode: {}", e))?;
-
-    socket
-        .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
-        .map_err(|e| format!("Failed to set timeout: {}", e))?;
-
-    socket
-        .set_broadcast(true)
-        .map_err(|e| format!("Failed to enable broadcast: {}", e))?;
+        .map_err(|e| format!("Failed to bind: {}", e))?;
+    socket.set_broadcast(true).ok();
+    socket.set_read_timeout(Some(Duration::from_millis(timeout_ms))).ok();
 
     let discovery_msg = b"DISCOVERY_REQUEST";
+    let broadcasts = get_broadcast_addresses(port);
 
-    // 1. Global Broadcast Address
-    let global_broadcast = format!("255.255.255.255:{}", port);
-
-    // 2. Local Subnet Broadcast Address (Calculated)
-    // This helps when OS points 255.255.255.255 to a wrong interface (e.g. VPN/VirtualBox)
-    let local_broadcast = get_local_network_range().ok().map(|(start, _)| {
-        let octets = start.octets();
-        // Assume /24 for simplicity -> x.x.x.255
-        format!("{}.{}.{}.255:{}", octets[0], octets[1], octets[2], port)
-    });
-
-    // Send multiple discovery broadcasts to increase chance of discovery
-    const BROADCAST_COUNT: usize = 3;
-    const BROADCAST_INTERVAL_MS: u64 = 200;
-
-    println!(
-        "[Discovery] Sending {} discovery broadcasts...",
-        BROADCAST_COUNT
-    );
-    if let Some(ref local) = local_broadcast {
-        println!(
-            "[Discovery] Target 1: {} (Global), Target 2: {} (Local Subnet)",
-            global_broadcast, local
-        );
-    } else {
-        println!("[Discovery] Target: {} (Global)", global_broadcast);
-    }
-
-    for i in 0..BROADCAST_COUNT {
-        // Send to Global Broadcast
-        if let Err(e) = socket.send_to(discovery_msg, &global_broadcast) {
-            eprintln!(
-                "[Discovery] Failed to send global broadcast #{}: {}",
-                i + 1,
-                e
-            );
+    // Send 5 broadcasts across all addresses for reliability
+    for round in 0..5 {
+        for addr in &broadcasts {
+            let _ = socket.send_to(discovery_msg, addr);
         }
-
-        // Send to Local Subnet Broadcast (if available)
-        if let Some(ref local_addr) = local_broadcast {
-            if let Err(e) = socket.send_to(discovery_msg, local_addr) {
-                eprintln!(
-                    "[Discovery] Failed to send local broadcast #{}: {}",
-                    i + 1,
-                    e
-                );
-            }
-        }
-
-        if i == 0 {
-            println!(
-                "[Discovery] Logic: Sent requests, waiting for responses (timeout: {}ms)...",
-                timeout_ms
-            );
-        }
-
-        // Wait a bit between broadcasts (except for the last one)
-        if i < BROADCAST_COUNT - 1 {
-            std::thread::sleep(Duration::from_millis(BROADCAST_INTERVAL_MS));
+        if round < 4 {
+            std::thread::sleep(Duration::from_millis(150));
         }
     }
+
+    log::info!("[Discovery] Sent broadcasts to {:?}, listening...", broadcasts);
 
     // Listen for responses
-    // Use a longer timeout to allow for delayed responses
-    let extended_timeout = timeout_ms + (BROADCAST_COUNT as u64 * BROADCAST_INTERVAL_MS);
-    socket
-        .set_read_timeout(Some(Duration::from_millis(extended_timeout)))
-        .map_err(|e| format!("Failed to set extended timeout: {}", e))?;
-
     let mut buffer = [0u8; 1024];
-    let start_time = std::time::Instant::now();
-    let timeout = Duration::from_millis(extended_timeout);
-    let mut last_response_time = start_time;
-    const MAX_SILENCE_MS: u64 = 1000; // If no response for 1s, likely done
+    let start = std::time::Instant::now();
+    let deadline = Duration::from_millis(timeout_ms + 800);
 
-    println!(
-        "[Discovery] Listening for responses (extended timeout: {}ms)...",
-        extended_timeout
-    );
-
-    while start_time.elapsed() < timeout {
+    while start.elapsed() < deadline {
         match socket.recv_from(&mut buffer) {
             Ok((size, addr)) => {
-                last_response_time = std::time::Instant::now();
                 let response = String::from_utf8_lossy(&buffer[..size]);
-                println!("[Discovery] Received response from {}: {}", addr, response);
+                let response = response.trim();
 
-                if response.starts_with("DISCOVERY_RESPONSE:") {
-                    // Parse response: "DISCOVERY_RESPONSE:name"
-                    // Handle case where name might contain ':'
-                    if let Some(name_start) = response.find(':') {
-                        let name = response[name_start + 1..].trim().to_string();
-
-                        if !name.is_empty() {
-                            // Check if device already exists (avoid duplicates)
-                            let device_exists = devices
-                                .iter()
-                                .any(|d: &DiscoveredDevice| d.ip == addr.ip().to_string());
-
-                            if !device_exists {
-                                let device = DiscoveredDevice {
-                                    ip: addr.ip().to_string(),
-                                    name,
-                                    port,
-                                    last_seen: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_secs(),
-                                };
-                                println!(
-                                    "[Discovery] ✅ Found device: {} at {} (total: {})",
-                                    device.name,
-                                    device.ip,
-                                    devices.len() + 1
-                                );
-                                devices.push(device);
-                            }
-                        }
-                    }
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Check if we've had silence for too long
-                if last_response_time.elapsed().as_millis() as u64 > MAX_SILENCE_MS
-                    && !devices.is_empty()
-                {
-                    println!(
-                        "[Discovery] No responses for {}ms, stopping early (found {} devices)",
-                        MAX_SILENCE_MS,
-                        devices.len()
-                    );
-                    break;
-                }
-                // Continue waiting if we haven't found any devices yet
-                if devices.is_empty() {
+                // Accept both old and new response formats
+                let name = if response.starts_with("DISCOVERY_RESPONSE:") {
+                    response.strip_prefix("DISCOVERY_RESPONSE:").unwrap_or("").to_string()
+                } else if response.starts_with("STUDENT_HERE:") {
+                    response.strip_prefix("STUDENT_HERE:").unwrap_or("").to_string()
+                } else {
                     continue;
+                };
+
+                if name.is_empty() { continue; }
+
+                let ip = addr.ip().to_string();
+                if !devices.iter().any(|d: &DiscoveredDevice| d.ip == ip) {
+                    log::info!("[Discovery] Found: {} at {}", name, ip);
+                    devices.push(DiscoveredDevice {
+                        ip,
+                        name,
+                        port: STUDENT_AGENT_PORT,
+                        last_seen: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap().as_secs(),
+                    });
                 }
-                break;
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(10));
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut
+                || e.kind() == std::io::ErrorKind::WouldBlock
+                || e.raw_os_error() == Some(35) =>
+            {
+                if !devices.is_empty() { break; }
                 continue;
             }
-            Err(ref e) if e.raw_os_error() == Some(35) => {
-                std::thread::sleep(Duration::from_millis(10));
-                continue;
-            }
-            Err(e) => {
-                // Only log non-expected errors
-                let error_code = e.raw_os_error();
-                if error_code != Some(35) && e.kind() != std::io::ErrorKind::WouldBlock {
-                    eprintln!(
-                        "[Discovery] Error receiving discovery response: {} (os error: {:?})",
-                        e, error_code
-                    );
-                }
+            Err(_) => {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
     }
 
-    println!(
-        "[Discovery] Discovery completed. Found {} device(s)",
-        devices.len()
-    );
+    log::info!("[Discovery] Found {} device(s)", devices.len());
     Ok(devices)
 }
 
-pub fn respond_to_discovery(name: &str, port: u16) -> Result<(), String> {
-    // Try to bind to the port
-    let socket = match UdpSocket::bind(format!("0.0.0.0:{}", port)) {
-        Ok(s) => s,
-        Err(e) => {
-            return Err(format!(
-                "Failed to bind response socket on port {}: {}. Port may be in use.",
-                port, e
-            ));
+
+// ============================================================
+// Student side: Respond to teacher's discovery scan
+// ============================================================
+
+/// Run on the student machine. Listens for discovery broadcasts from teacher
+/// and responds with the student's name. This is what makes the student
+/// visible to the teacher's "Scan" button.
+///
+/// Also periodically announces itself so the teacher's auto-connect can find it.
+pub fn run_student_discovery_responder(
+    student_name: &str,
+    port: u16,
+) -> Result<(), String> {
+    // Use SO_REUSEADDR so multiple processes can share the port
+    let socket = {
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        ).map_err(|e| format!("Failed to create socket: {}", e))?;
+
+        sock.set_reuse_address(true).ok();
+        #[cfg(unix)]
+        {
+            // SO_REUSEPORT on Unix
+            let _ = sock.set_reuse_address(true);
         }
+        sock.set_broadcast(true).ok();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
+
+        let addr: std::net::SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+        sock.bind(&addr.into())
+            .map_err(|e| format!("Failed to bind port {}: {}", port, e))?;
+
+        let std_socket: UdpSocket = sock.into();
+        std_socket
     };
 
-    socket
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .map_err(|e| format!("Failed to set timeout: {}", e))?;
-
-    socket
-        .set_broadcast(true)
-        .map_err(|e| format!("Failed to enable broadcast: {}", e))?;
-
-    println!(
-        "[Discovery] Listener started on port {} for device: {}",
-        port, name
-    );
+    log::info!("[StudentDiscovery] Listening on port {} as '{}'", port, student_name);
 
     let mut buffer = [0u8; 1024];
-    let mut error_count = 0;
-    const MAX_ERRORS: u32 = 10;
+    let mut announce_timer = std::time::Instant::now();
+    let announce_interval = Duration::from_secs(5);
 
     loop {
+        // Periodically announce ourselves (so teacher auto-connect picks us up)
+        if announce_timer.elapsed() >= announce_interval {
+            let announce = format!("STUDENT_HERE:{}", student_name);
+            for addr in &get_broadcast_addresses(port) {
+                let _ = socket.send_to(announce.as_bytes(), addr);
+            }
+            announce_timer = std::time::Instant::now();
+        }
+
         match socket.recv_from(&mut buffer) {
             Ok((size, addr)) => {
-                error_count = 0; // Reset error count on success
-
                 let request = String::from_utf8_lossy(&buffer[..size]);
-                let request_trimmed = request.trim();
+                let request = request.trim();
 
-                println!(
-                    "[Discovery] Received request from {}: '{}'",
-                    addr, request_trimmed
-                );
-
-                if request_trimmed == "DISCOVERY_REQUEST" {
-                    let response = format!("DISCOVERY_RESPONSE:{}", name);
-                    match socket.send_to(response.as_bytes(), addr) {
-                        Ok(bytes_sent) => {
-                            println!("[Discovery] ✅ Responded to discovery from {} (sent {} bytes, name: {})", addr, bytes_sent, name);
-                        }
-                        Err(e) => {
-                            eprintln!("[Discovery] ❌ Failed to send response to {}: {}", addr, e);
+                match request {
+                    // Teacher's scan button
+                    "DISCOVERY_REQUEST" => {
+                        let response = format!("STUDENT_HERE:{}", student_name);
+                        if let Err(e) = socket.send_to(response.as_bytes(), addr) {
+                            log::warn!("[StudentDiscovery] Failed to respond to {}: {}", addr, e);
+                        } else {
+                            log::info!("[StudentDiscovery] Responded to scan from {}", addr);
                         }
                     }
-                } else {
-                    println!(
-                        "[Discovery] ⚠️ Unknown request format: '{}'",
-                        request_trimmed
-                    );
+                    // Legacy: old teacher format
+                    _ if request.starts_with("DISCOVERY_REQUEST") => {
+                        let response = format!("DISCOVERY_RESPONSE:{}", student_name);
+                        let _ = socket.send_to(response.as_bytes(), addr);
+                    }
+                    _ => {} // Ignore other messages (including our own broadcasts)
                 }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                // Continue listening - timeout is expected
-                continue;
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // Non-blocking socket, continue
-                continue;
-            }
-            Err(ref e) if e.raw_os_error() == Some(35) => {
-                // macOS: Resource temporarily unavailable (EAGAIN)
-                // This is normal for non-blocking sockets, just continue
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut
+                || e.kind() == std::io::ErrorKind::WouldBlock
+                || e.raw_os_error() == Some(35) =>
+            {
                 continue;
             }
             Err(e) => {
-                error_count += 1;
-                let error_code = e.raw_os_error();
-
-                // Only log non-expected errors (not EAGAIN/EWOULDBLOCK)
-                if error_code != Some(35) && e.kind() != std::io::ErrorKind::WouldBlock {
-                    eprintln!(
-                        "[Discovery] Error receiving: {} (os error: {:?}, error count: {})",
-                        e, error_code, error_count
-                    );
-                }
-
-                // If too many errors, return error
-                if error_count >= MAX_ERRORS {
-                    return Err(format!("Too many errors in discovery listener: {}", e));
-                }
-
-                // Small delay before retrying
+                log::warn!("[StudentDiscovery] Error: {}", e);
                 std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
+}
+
+// ============================================================
+// Teacher side: Listen for student announcements + auto-connect
+// ============================================================
+
+/// Run on the teacher machine. Listens for student announcements
+/// and auto-connects to new students.
+pub fn run_teacher_auto_connect<F>(
+    teacher_name: &str,
+    port: u16,
+    on_student_found: F,
+) -> Result<(), String>
+where
+    F: Fn(String, u16) + Send + 'static,
+{
+    let socket = {
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        ).map_err(|e| format!("Failed to create socket: {}", e))?;
+
+        sock.set_reuse_address(true).ok();
+        #[cfg(unix)]
+        {
+            let _ = sock.set_reuse_address(true);
+        }
+        sock.set_broadcast(true).ok();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
+
+        let addr: std::net::SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+        sock.bind(&addr.into())
+            .map_err(|e| format!("Failed to bind port {}: {}", port, e))?;
+
+        let std_socket: UdpSocket = sock.into();
+        std_socket
+    };
+
+    log::info!("[TeacherAutoConnect] Listening on port {} for students", port);
+
+    let mut buffer = [0u8; 1024];
+    let mut known_students = std::collections::HashSet::new();
+
+    // Also periodically send discovery requests (active scanning)
+    let mut scan_timer = std::time::Instant::now();
+    let scan_interval = Duration::from_secs(8);
+
+    loop {
+        // Periodically broadcast discovery request
+        if scan_timer.elapsed() >= scan_interval {
+            let discovery_msg = b"DISCOVERY_REQUEST";
+            for addr in &get_broadcast_addresses(port) {
+                let _ = socket.send_to(discovery_msg, addr);
+            }
+            scan_timer = std::time::Instant::now();
+        }
+
+        match socket.recv_from(&mut buffer) {
+            Ok((size, addr)) => {
+                let msg = String::from_utf8_lossy(&buffer[..size]);
+                let msg = msg.trim();
+
+                // Student announcing itself or responding to our scan
+                let student_name = if msg.starts_with("STUDENT_HERE:") {
+                    msg.strip_prefix("STUDENT_HERE:").unwrap_or("")
+                } else if msg.starts_with("DISCOVERY_RESPONSE:") {
+                    msg.strip_prefix("DISCOVERY_RESPONSE:").unwrap_or("")
+                } else if msg == "STUDENT_LOOKING_FOR_TEACHER" {
+                    // Legacy student auto-connect — respond and connect
+                    let response = format!("TEACHER_HERE:{}", teacher_name);
+                    let _ = socket.send_to(response.as_bytes(), addr);
+                    "Student" // Use generic name, will get real name on WebSocket connect
+                } else {
+                    continue;
+                };
+
+                if student_name.is_empty() { continue; }
+
+                let student_ip = addr.ip().to_string();
+
+                // Skip our own broadcasts
+                if let Some(local_ip) = get_local_ip() {
+                    if student_ip == local_ip.to_string() { continue; }
+                }
+
+                if !known_students.contains(&student_ip) {
+                    known_students.insert(student_ip.clone());
+                    log::info!("[TeacherAutoConnect] New student: {} at {}", student_name, student_ip);
+                    on_student_found(student_ip, STUDENT_AGENT_PORT);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut
+                || e.kind() == std::io::ErrorKind::WouldBlock
+                || e.raw_os_error() == Some(35) =>
+            {
+                continue;
+            }
+            Err(e) => {
+                log::warn!("[TeacherAutoConnect] Error: {}", e);
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+/// Legacy: respond_to_discovery (kept for backward compatibility)
+pub fn respond_to_discovery(name: &str, port: u16) -> Result<(), String> {
+    run_student_discovery_responder(name, port)
 }

@@ -45,7 +45,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": ["binaries/smartlab-service.exe"],
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.13",

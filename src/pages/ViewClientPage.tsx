@@ -254,7 +254,7 @@ export function ViewClientPage({ onBack }: ViewClientPageProps) {
     try {
       const devices = await invoke<Array<{ ip: string; name: string; port: number }>>(
         'discover_lan_devices',
-        { port: 3017, timeoutMs: 3000 }
+        { port: 3018, timeoutMs: 3000 }
       );
 
       console.log(`[ViewClient] Found ${devices.length} devices:`, devices);

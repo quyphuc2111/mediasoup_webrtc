@@ -12,12 +12,13 @@ use std::sync::Arc;
 use crate::student_agent::AgentState;
 
 /// Setup the system tray for student app
+/// Note: No quit option — students cannot exit the app (like Veyon/NetSupport)
 pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::error::Error>> {
-    // Create tray menu
+    // Create tray menu — no quit button, students cannot exit
     let show_item = MenuItem::with_id(app, "show", "Hiện cửa sổ", true, None::<&str>)?;
     let status_item = MenuItem::with_id(app, "status", "Trạng thái: Đang khởi động...", false, None::<&str>)?;
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
+    let info_item = MenuItem::with_id(app, "info", "Smartlab Student đang chạy", false, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
@@ -25,7 +26,7 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::err
             &status_item,
             &separator1,
             &show_item,
-            &quit_item,
+            &info_item,
         ],
     )?;
 
@@ -41,10 +42,6 @@ pub fn setup_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::err
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
-                }
-                "quit" => {
-                    log::info!("[StudentTray] Quit requested");
-                    app.exit(0);
                 }
                 _ => {}
             }
@@ -97,7 +94,7 @@ pub fn update_tray_status<R: Runtime>(
         let show_item = MenuItem::with_id(app, "show", "Hiện cửa sổ", true, None::<&str>)?;
         let status_item = MenuItem::with_id(app, "status", format!("Trạng thái: {}", status_text), false, None::<&str>)?;
         let separator1 = PredefinedMenuItem::separator(app)?;
-        let quit_item = MenuItem::with_id(app, "quit", "Thoát", true, None::<&str>)?;
+        let info_item = MenuItem::with_id(app, "info", "Smartlab Student đang chạy", false, None::<&str>)?;
 
         let menu = Menu::with_items(
             app,
@@ -105,7 +102,7 @@ pub fn update_tray_status<R: Runtime>(
                 &status_item,
                 &separator1,
                 &show_item,
-                &quit_item,
+                &info_item,
             ],
         )?;
         

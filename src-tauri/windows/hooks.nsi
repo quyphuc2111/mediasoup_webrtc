@@ -1,13 +1,13 @@
 ; SmartlabStudent NSIS Installer Hooks
-; Implements Veyon/NetSupport-style autostart:
-; 1. HKLM Registry Run key (system-wide)
-; 2. Windows Scheduled Task (runs at logon, auto-restart)
+; 1. HKLM Registry Run key (system-wide autostart)
+; 2. Windows Scheduled Task (runs at logon, elevated)
 ; 3. Windows Firewall exception
+; 4. SmartlabService (Windows Service - runs at boot, before login)
 ;
 ; Available Tauri NSIS variables:
 ;   $INSTDIR          - Installation directory
 ;   ${PRODUCTNAME}    - Product name from tauri.conf.json
-;   ${MAINBINARYNAME} - The actual binary filename (e.g. SmartlabStudent.exe)
+;   ${MAINBINARYNAME} - The actual binary filename
 
 !macro NSIS_HOOK_POSTINSTALL
   ; ============================================================
@@ -17,58 +17,80 @@
   DetailPrint "Added ${PRODUCTNAME} to system startup (HKLM)"
 
   ; ============================================================
-  ; 2. Scheduled Task (like Veyon - runs at logon, auto-restart)
+  ; 2. Scheduled Task (runs at logon, elevated)
   ; ============================================================
-  
-  ; Delete existing task first (ignore errors)
   nsExec::ExecToLog 'schtasks /Delete /TN "${PRODUCTNAME}" /F'
-  
-  ; Create scheduled task that runs at user logon with highest privileges
   nsExec::ExecToLog 'schtasks /Create /TN "${PRODUCTNAME}" /TR "\"$INSTDIR\${MAINBINARYNAME}.exe\"" /SC ONLOGON /RL HIGHEST /F'
   Pop $0
   StrCmp $0 "0" task_ok
-    ; Fallback: create task without HIGHEST privilege
     nsExec::ExecToLog 'schtasks /Create /TN "${PRODUCTNAME}" /TR "\"$INSTDIR\${MAINBINARYNAME}.exe\"" /SC ONLOGON /F'
-    DetailPrint "Created scheduled task for auto-start (normal)"
+    DetailPrint "Created scheduled task (normal)"
     Goto task_done
   task_ok:
-    DetailPrint "Created scheduled task for auto-start (elevated)"
+    DetailPrint "Created scheduled task (elevated)"
   task_done:
 
   ; ============================================================
-  ; 3. Windows Firewall exception (like Veyon/NetSupport)
+  ; 3. Windows Firewall exception
   ; ============================================================
-  
-  ; Remove old rules first
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME}"'
-  
-  ; Add inbound firewall rule
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="${PRODUCTNAME}" dir=in action=allow program="$INSTDIR\${MAINBINARYNAME}.exe" enable=yes profile=any'
-  
-  ; Add outbound firewall rule
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="${PRODUCTNAME} Out" dir=out action=allow program="$INSTDIR\${MAINBINARYNAME}.exe" enable=yes profile=any'
-  
+
+  ; Firewall for the service too
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService"'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService" dir=in action=allow program="$INSTDIR\resources\smartlab-service.exe" enable=yes profile=any'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService Out" dir=out action=allow program="$INSTDIR\resources\smartlab-service.exe" enable=yes profile=any'
   DetailPrint "Added Windows Firewall exceptions"
-  DetailPrint "${PRODUCTNAME} installation complete - auto-start configured"
+
+  ; ============================================================
+  ; 4. Install and start SmartlabService (Windows Service)
+  ;    Runs at boot level, allows teacher to connect before login
+  ; ============================================================
+
+  ; Stop and remove old service if exists
+  nsExec::ExecToLog '"$INSTDIR\resources\smartlab-service.exe" --uninstall'
+
+  ; Install the service
+  nsExec::ExecToLog '"$INSTDIR\resources\smartlab-service.exe" --install'
+  Pop $0
+  StrCmp $0 "0" svc_installed
+    DetailPrint "Warning: Could not install SmartlabService"
+    Goto svc_done
+  svc_installed:
+    DetailPrint "SmartlabService installed"
+
+    ; Start the service immediately
+    nsExec::ExecToLog 'sc start SmartlabService'
+    DetailPrint "SmartlabService started"
+  svc_done:
+
+  DetailPrint "${PRODUCTNAME} installation complete"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; Kill running process before uninstall
+  ; Kill running app
   nsExec::ExecToLog 'taskkill /F /IM ${MAINBINARYNAME}.exe'
-  
+
+  ; Stop and uninstall the service
+  nsExec::ExecToLog 'sc stop SmartlabService'
+  ; Wait for service to stop
+  Sleep 2000
+  nsExec::ExecToLog '"$INSTDIR\resources\smartlab-service.exe" --uninstall'
+  DetailPrint "SmartlabService uninstalled"
+
   ; Remove registry keys
   DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
-  DetailPrint "Removed ${PRODUCTNAME} from startup registry"
-  
+
   ; Remove scheduled task
   nsExec::ExecToLog 'schtasks /Delete /TN "${PRODUCTNAME}" /F'
-  DetailPrint "Removed ${PRODUCTNAME} scheduled task"
-  
+
   ; Remove firewall rules
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME}"'
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME} Out"'
-  DetailPrint "Removed ${PRODUCTNAME} firewall rules"
-  
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService"'
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService Out"'
+
   DetailPrint "${PRODUCTNAME} uninstall cleanup complete"
 !macroend

@@ -1,0 +1,33 @@
+[package]
+name = "smartlab-service"
+version = "0.1.0"
+edition = "2021"
+description = "SmartlabStudent Windows Service - runs at boot, listens for teacher commands before user login"
+
+[[bin]]
+name = "smartlab-service"
+path = "src/main.rs"
+
+[dependencies]
+# Windows Service framework
+windows-service = "0.7"
+# Logging
+log = "0.4"
+env_logger = "0.11"
+# Networking
+tokio = { version = "1", features = ["net", "io-util", "rt-multi-thread", "macros", "time", "sync"] }
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+# Windows API for user logon
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+    "Win32_System_Environment",
+    "Win32_UI_WindowsAndMessaging",
+] }

@@ -192,7 +192,7 @@ const LabControl: React.FC<LabControlProps> = () => {
     setIsScanning(true);
     setScanError(null);
     try {
-      const port = 3017;
+      const port = 3018;
       const timeout = 3000;
       const devices = await invoke<DiscoveredDevice[]>('discover_lan_devices', { port, timeoutMs: timeout });
       setDiscoveredDevices(devices);

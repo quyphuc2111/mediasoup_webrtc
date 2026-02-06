@@ -42,6 +42,31 @@ pub fn register_autostart() -> Result<(), String> {
     { Ok(()) }
 }
 
+/// Enable Windows Auto-Logon for current user (no password required at boot)
+/// This allows the student app to start automatically even after a reboot
+pub fn enable_auto_logon() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    { return enable_auto_logon_windows(); }
+    #[cfg(not(target_os = "windows"))]
+    { Err("Auto-logon is only supported on Windows".to_string()) }
+}
+
+/// Disable Windows Auto-Logon
+pub fn disable_auto_logon() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    { return disable_auto_logon_windows(); }
+    #[cfg(not(target_os = "windows"))]
+    { Err("Auto-logon is only supported on Windows".to_string()) }
+}
+
+/// Check if Windows Auto-Logon is enabled
+pub fn is_auto_logon_enabled() -> bool {
+    #[cfg(target_os = "windows")]
+    { return is_auto_logon_enabled_windows(); }
+    #[cfg(not(target_os = "windows"))]
+    { false }
+}
+
 
 // ============================================================
 // Windows Implementation
@@ -160,6 +185,85 @@ fn register_autostart_windows() -> Result<(), String> {
     log::info!("[Autostart] Firewall rules configured");
 
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn enable_auto_logon_windows() -> Result<String, String> {
+    use std::process::Command;
+
+    // Get current username
+    let username = std::env::var("USERNAME")
+        .unwrap_or_else(|_| "Student".to_string());
+
+    log::info!("[AutoLogon] Enabling auto-logon for user: {}", username);
+
+    // Set AutoAdminLogon = 1
+    let _ = Command::new("reg")
+        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "AutoAdminLogon", "/t", "REG_SZ", "/d", "1", "/f"])
+        .output()
+        .map_err(|e| format!("Failed to set AutoAdminLogon: {}", e))?;
+
+    // Set DefaultUserName
+    let _ = Command::new("reg")
+        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "DefaultUserName", "/t", "REG_SZ", "/d", &username, "/f"])
+        .output()
+        .map_err(|e| format!("Failed to set DefaultUserName: {}", e))?;
+
+    // Set empty DefaultPassword (removes password requirement)
+    let _ = Command::new("reg")
+        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "DefaultPassword", "/t", "REG_SZ", "/d", "", "/f"])
+        .output()
+        .map_err(|e| format!("Failed to set DefaultPassword: {}", e))?;
+
+    // Clear domain for local accounts
+    let _ = Command::new("reg")
+        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "DefaultDomainName", "/t", "REG_SZ", "/d", "", "/f"])
+        .output();
+
+    log::info!("[AutoLogon] Auto-logon enabled for: {}", username);
+    Ok(username)
+}
+
+#[cfg(target_os = "windows")]
+fn disable_auto_logon_windows() -> Result<(), String> {
+    use std::process::Command;
+
+    log::info!("[AutoLogon] Disabling auto-logon");
+
+    let _ = Command::new("reg")
+        .args(["add", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "AutoAdminLogon", "/t", "REG_SZ", "/d", "0", "/f"])
+        .output()
+        .map_err(|e| format!("Failed to disable AutoAdminLogon: {}", e))?;
+
+    // Remove stored password
+    let _ = Command::new("reg")
+        .args(["delete", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "DefaultPassword", "/f"])
+        .output();
+
+    log::info!("[AutoLogon] Auto-logon disabled");
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn is_auto_logon_enabled_windows() -> bool {
+    use std::process::Command;
+
+    let output = Command::new("reg")
+        .args(["query", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+               "/v", "AutoAdminLogon"])
+        .output();
+
+    if let Ok(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return stdout.contains("0x1") || stdout.contains("    1");
+    }
+    false
 }
 
 

@@ -827,6 +827,88 @@ fn quit_app(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ============================================================
+// Remote Login Command (via SmartlabService on student machine)
+// ============================================================
+
+/// Send remote login command to a student machine's service
+/// The service runs at boot level and can login users before they're logged in
+#[tauri::command]
+async fn remote_login_student(
+    ip: String,
+    username: String,
+    password: String,
+    domain: Option<String>,
+) -> Result<String, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    let addr = format!("{}:3019", ip);
+    log::info!("[RemoteLogin] Connecting to service at {}", addr);
+
+    let stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| format!("Cannot connect to student service at {}: {}", addr, e))?;
+
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    // Send login command
+    let cmd = serde_json::json!({
+        "command": "login",
+        "username": username,
+        "password": password,
+        "domain": domain,
+    });
+    let mut cmd_str = serde_json::to_string(&cmd).map_err(|e| e.to_string())?;
+    cmd_str.push('\n');
+
+    writer.write_all(cmd_str.as_bytes()).await
+        .map_err(|e| format!("Failed to send command: {}", e))?;
+
+    // Read response
+    let mut response_line = String::new();
+    reader.read_line(&mut response_line).await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    let resp: serde_json::Value = serde_json::from_str(response_line.trim())
+        .map_err(|e| format!("Invalid response: {}", e))?;
+
+    if resp["success"].as_bool().unwrap_or(false) {
+        Ok(resp["message"].as_str().unwrap_or("OK").to_string())
+    } else {
+        Err(resp["message"].as_str().unwrap_or("Unknown error").to_string())
+    }
+}
+
+/// Ping a student machine's service to check if it's reachable (even before login)
+#[tauri::command]
+async fn ping_student_service(ip: String) -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    let addr = format!("{}:3019", ip);
+
+    let stream = TcpStream::connect(&addr)
+        .await
+        .map_err(|e| format!("Service not reachable at {}: {}", addr, e))?;
+
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    // Send status command
+    let cmd = "{\"command\":\"status\"}\n";
+    writer.write_all(cmd.as_bytes()).await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    let mut response_line = String::new();
+    reader.read_line(&mut response_line).await
+        .map_err(|e| format!("Failed to read: {}", e))?;
+
+    serde_json::from_str(response_line.trim())
+        .map_err(|e| format!("Invalid response: {}", e))
+}
+
 /// Get current agent status
 #[tauri::command]
 fn get_agent_status(state: State<Arc<AgentState>>) -> AgentStatus {
@@ -1066,27 +1148,23 @@ fn start_teacher_discovery(
     teacher_name: String,
     connector_state: State<Arc<ConnectorState>>,
 ) -> Result<(), String> {
-    log::info!("[TeacherDiscovery] Starting discovery service with name: {}", teacher_name);
+    log::info!("[TeacherDiscovery] Starting unified discovery service as '{}'", teacher_name);
     
-    // Clone state for the thread
     let state = Arc::clone(&connector_state);
     
-    // Start discovery responder in background thread with auto-connect callback
+    // Start the unified teacher auto-connect (listens for student announcements + active scanning)
     std::thread::spawn(move || {
         let on_student_found = move |ip: String, port: u16| {
             log::info!("[TeacherDiscovery] Auto-connecting to student at {}:{}", ip, port);
             
-            // Clone for async task
             let state_clone = Arc::clone(&state);
             let app_clone = app.clone();
             let ip_clone = ip.clone();
             
-            // Spawn connection in connector runtime
             get_connector_runtime().spawn(async move {
-                // Generate connection ID
                 let id = format!("{}:{}", ip_clone, port);
                 
-                // Check if already connected
+                // Skip if already connected
                 if let Some(conn) = state_clone.get_connection(&id) {
                     if conn.status != teacher_connector::ConnectionStatus::Disconnected
                         && !matches!(conn.status, teacher_connector::ConnectionStatus::Error { .. })
@@ -1096,7 +1174,6 @@ fn start_teacher_discovery(
                     }
                 }
                 
-                // Create connection entry
                 let connection = teacher_connector::StudentConnection {
                     id: id.clone(),
                     ip: ip_clone.clone(),
@@ -1108,33 +1185,24 @@ fn start_teacher_discovery(
                     update_status: None,
                 };
                 
-                // Store connection
-                {
-                    if let Ok(mut conns) = state_clone.connections.lock() {
-                        conns.insert(id.clone(), connection);
-                    }
+                if let Ok(mut conns) = state_clone.connections.lock() {
+                    conns.insert(id.clone(), connection);
                 }
                 
-                // Start connection
                 log::info!("[TeacherDiscovery] Connecting to {}:{}", ip_clone, port);
                 match teacher_connector::handle_connection_async(
-                    state_clone,
-                    id.clone(),
-                    ip_clone.clone(),
-                    port,
-                    app_clone,
-                )
-                .await
-                {
-                    Ok(()) => log::info!("[TeacherDiscovery] Connection to {} closed normally", id),
+                    state_clone, id.clone(), ip_clone.clone(), port, app_clone,
+                ).await {
+                    Ok(()) => log::info!("[TeacherDiscovery] Connection to {} closed", id),
                     Err(e) => log::error!("[TeacherDiscovery] Connection to {} failed: {}", id, e),
                 }
             });
         };
         
-        if let Err(e) = student_auto_connect::respond_to_student_discovery_with_callback(
+        // Use the new unified discovery system
+        if let Err(e) = lan_discovery::run_teacher_auto_connect(
             &teacher_name,
-            3018,
+            lan_discovery::DISCOVERY_PORT,
             on_student_found,
         ) {
             log::error!("[TeacherDiscovery] Discovery service error: {}", e);
@@ -1956,9 +2024,20 @@ pub fn run() {
                     }
                 });
                 
-                // Start auto-connect service
+                // Start discovery responder (so teacher's scan can find us)
+                let discovery_name = student_name.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = lan_discovery::run_student_discovery_responder(
+                        &discovery_name,
+                        lan_discovery::DISCOVERY_PORT,
+                    ) {
+                        log::error!("[StudentDiscovery] Responder error: {}", e);
+                    }
+                });
+                
+                // Start auto-connect service (legacy: broadcasts looking for teacher)
                 let auto_connect_config = student_auto_connect::AutoConnectConfig {
-                    teacher_port: 3018,
+                    teacher_port: lan_discovery::DISCOVERY_PORT,
                     retry_interval_secs: 10,
                     discovery_timeout_ms: 3000,
                 };
@@ -1969,7 +2048,7 @@ pub fn run() {
                     }
                 });
                 
-                log::info!("[Setup] Student agent auto-started with system tray");
+                log::info!("[Setup] Student agent auto-started with discovery + auto-connect");
             } else {
                 log::info!("[Setup] Running in Teacher mode");
             }
@@ -2034,6 +2113,9 @@ pub fn run() {
             quit_app,
             get_agent_status,
             get_agent_config,
+            // Auto-Logon commands
+            remote_login_student,
+            ping_student_service,
             // Teacher Connector commands
             connect_to_student,
             disconnect_from_student,
