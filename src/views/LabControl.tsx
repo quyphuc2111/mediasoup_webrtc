@@ -120,6 +120,14 @@ const LabControl: React.FC<LabControlProps> = () => {
     studentName: string;
   } | null>(null);
 
+  // Remote Login state
+  const [remoteLoginTarget, setRemoteLoginTarget] = useState<{ ip: string; studentId: string } | null>(null);
+  const [remoteLoginUsername, setRemoteLoginUsername] = useState('');
+  const [remoteLoginPassword, setRemoteLoginPassword] = useState('');
+  const [remoteLoginDomain, setRemoteLoginDomain] = useState('');
+  const [remoteLoginLoading, setRemoteLoginLoading] = useState(false);
+  const [remoteLoginResult, setRemoteLoginResult] = useState<{ success: boolean; message: string } | null>(null);
+
   // Remote control refs
   const screenContainerRef = useRef<HTMLDivElement>(null);
   const keyboardInputRef = useRef<HTMLInputElement>(null);
@@ -383,6 +391,44 @@ const LabControl: React.FC<LabControlProps> = () => {
     setRemoteControlEnabled(true);
   };
 
+  // Remote Login handlers
+  const openRemoteLogin = (ip: string, studentId: string) => {
+    setRemoteLoginTarget({ ip, studentId });
+    setRemoteLoginUsername('');
+    setRemoteLoginPassword('');
+    setRemoteLoginDomain('');
+    setRemoteLoginResult(null);
+    setRemoteLoginLoading(false);
+  };
+
+  const closeRemoteLogin = () => {
+    setRemoteLoginTarget(null);
+    setRemoteLoginResult(null);
+  };
+
+  const handleRemoteLogin = async () => {
+    if (!remoteLoginTarget || !remoteLoginUsername || !remoteLoginPassword) return;
+    
+    setRemoteLoginLoading(true);
+    setRemoteLoginResult(null);
+    
+    try {
+      const result = await invoke<string>('remote_login_student', {
+        ip: remoteLoginTarget.ip,
+        username: remoteLoginUsername,
+        password: remoteLoginPassword,
+        domain: remoteLoginDomain || null,
+      });
+      setRemoteLoginResult({ success: true, message: result });
+      // Auto close after success
+      setTimeout(() => closeRemoteLogin(), 2000);
+    } catch (err: any) {
+      setRemoteLoginResult({ success: false, message: String(err) });
+    } finally {
+      setRemoteLoginLoading(false);
+    }
+  };
+
   // Open FileManager for a student
   const openFileManager = (conn: StudentConnection) => {
     setFileManagerStudent(conn);
@@ -555,6 +601,12 @@ const LabControl: React.FC<LabControlProps> = () => {
             {frame && <span className="text-xs text-slate-500">{frame.width}x{frame.height}</span>}
           </div>
           <div className="flex items-center gap-3">
+            {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
+              <button onClick={() => openRemoteLogin(conn.ip, conn.id)}
+                className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-xl text-white text-sm font-bold transition-colors">
+                <Lock className="w-4 h-4" /> Remote Login
+              </button>
+            )}
             <button onClick={() => { setActiveViewMode('control'); setRemoteControlEnabled(true); }}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white text-sm font-bold transition-colors">
               <MousePointer className="w-4 h-4" /> Điều khiển
@@ -579,11 +631,10 @@ const LabControl: React.FC<LabControlProps> = () => {
               >
                 <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
                 {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white">
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900/80 text-white pointer-events-none">
                     <Lock className="w-16 h-16 mb-4 text-amber-400" />
                     <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
-                    <span className="text-sm text-slate-400 mt-2">Không thể capture Secure Desktop</span>
-                    <span className="text-sm text-slate-400">Sử dụng Remote Login để đăng nhập từ xa</span>
+                    <span className="text-sm text-slate-400 mt-2">Nhấn "Remote Login" ở thanh trên để đăng nhập</span>
                   </div>
                 )}
               </div>
@@ -591,7 +642,7 @@ const LabControl: React.FC<LabControlProps> = () => {
               <div className="flex flex-col items-center justify-center text-white">
                 <Lock className="w-16 h-16 mb-4 text-amber-400" />
                 <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
-                <span className="text-sm text-slate-400 mt-2">Sử dụng Remote Login để đăng nhập từ xa</span>
+                <span className="text-sm text-slate-400 mt-2">Nhấn "Remote Login" ở thanh trên để đăng nhập</span>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center text-white">
@@ -601,6 +652,58 @@ const LabControl: React.FC<LabControlProps> = () => {
             )}
           </div>
         </div>
+
+        {/* Remote Login Modal - inside fullscreen view */}
+        {remoteLoginTarget && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60" onClick={closeRemoteLogin}>
+            <div className="bg-white rounded-xl shadow-2xl w-[400px] p-6" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                  <Lock className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Remote Login</h3>
+                  <p className="text-sm text-slate-500">{remoteLoginTarget.ip}</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Tên đăng nhập</label>
+                  <input type="text" value={remoteLoginUsername} onChange={e => setRemoteLoginUsername(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="username" autoFocus onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
+                  <input type="password" value={remoteLoginPassword} onChange={e => setRemoteLoginPassword(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="••••••••" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Domain <span className="text-slate-400">(tùy chọn)</span></label>
+                  <input type="text" value={remoteLoginDomain} onChange={e => setRemoteLoginDomain(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="DOMAIN" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
+                </div>
+              </div>
+              {remoteLoginResult && (
+                <div className={`mt-3 p-3 rounded-lg text-sm ${remoteLoginResult.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                  {remoteLoginResult.message}
+                </div>
+              )}
+              <div className="flex gap-3 mt-5">
+                <button onClick={closeRemoteLogin}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors">
+                  Hủy
+                </button>
+                <button onClick={handleRemoteLogin} disabled={remoteLoginLoading || !remoteLoginUsername || !remoteLoginPassword}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+                  {remoteLoginLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Đang đăng nhập...</> : <><LogOut className="w-4 h-4" /> Đăng nhập</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -630,6 +733,12 @@ const LabControl: React.FC<LabControlProps> = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
+              <button onClick={() => openRemoteLogin(conn.ip, conn.id)}
+                className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-xl text-white text-sm font-bold transition-colors">
+                <Lock className="w-4 h-4" /> Remote Login
+              </button>
+            )}
             <button onClick={() => { setActiveViewMode('fullscreen'); setRemoteControlEnabled(false); }}
               className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white text-sm font-bold transition-colors">
               <Minimize2 className="w-4 h-4" /> Chỉ xem
@@ -661,10 +770,10 @@ const LabControl: React.FC<LabControlProps> = () => {
               >
                 <H264VideoPlayer frame={frame} className="w-full h-full object-contain pointer-events-none" connectionId={conn!.id} />
                 {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white pointer-events-none">
+                  <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900/80 text-white pointer-events-none">
                     <Lock className="w-16 h-16 mb-4 text-amber-400" />
                     <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
-                    <span className="text-sm text-slate-400 mt-2">Không thể capture Secure Desktop</span>
+                    <span className="text-sm text-slate-400 mt-2">Nhấn "Remote Login" ở thanh trên để đăng nhập</span>
                   </div>
                 )}
               </div>
@@ -672,7 +781,7 @@ const LabControl: React.FC<LabControlProps> = () => {
               <div className="flex flex-col items-center justify-center text-white">
                 <Lock className="w-16 h-16 mb-4 text-amber-400" />
                 <span className="text-lg font-medium text-amber-300">Màn hình đăng nhập Windows</span>
-                <span className="text-sm text-slate-400 mt-2">Sử dụng Remote Login để đăng nhập từ xa</span>
+                <span className="text-sm text-slate-400 mt-2">Nhấn "Remote Login" ở thanh trên để đăng nhập</span>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center text-white">
@@ -687,6 +796,58 @@ const LabControl: React.FC<LabControlProps> = () => {
         <div className="flex-shrink-0 px-6 py-2 bg-slate-900 border-t border-slate-800 text-center">
           <span className="text-xs text-slate-500">Click vào màn hình để điều khiển chuột • Gõ phím để điều khiển bàn phím • Cuộn để xem toàn bộ</span>
         </div>
+
+        {/* Remote Login Modal - inside control modal */}
+        {remoteLoginTarget && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60" onClick={closeRemoteLogin}>
+            <div className="bg-white rounded-xl shadow-2xl w-[400px] p-6" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                  <Lock className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Remote Login</h3>
+                  <p className="text-sm text-slate-500">{remoteLoginTarget.ip}</p>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Tên đăng nhập</label>
+                  <input type="text" value={remoteLoginUsername} onChange={e => setRemoteLoginUsername(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="username" autoFocus onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
+                  <input type="password" value={remoteLoginPassword} onChange={e => setRemoteLoginPassword(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="••••••••" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Domain <span className="text-slate-400">(tùy chọn)</span></label>
+                  <input type="text" value={remoteLoginDomain} onChange={e => setRemoteLoginDomain(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="DOMAIN" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
+                </div>
+              </div>
+              {remoteLoginResult && (
+                <div className={`mt-3 p-3 rounded-lg text-sm ${remoteLoginResult.success ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                  {remoteLoginResult.message}
+                </div>
+              )}
+              <div className="flex gap-3 mt-5">
+                <button onClick={closeRemoteLogin}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors">
+                  Hủy
+                </button>
+                <button onClick={handleRemoteLogin} disabled={remoteLoginLoading || !remoteLoginUsername || !remoteLoginPassword}
+                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
+                  {remoteLoginLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Đang đăng nhập...</> : <><LogOut className="w-4 h-4" /> Đăng nhập</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -793,17 +954,16 @@ const LabControl: React.FC<LabControlProps> = () => {
                     <>
                       <H264VideoPlayer frame={frame} className="w-full h-full object-contain" connectionId={conn!.id} />
                       {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 text-white">
+                        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-900/80 text-white pointer-events-none">
                           <Lock className="w-8 h-8 mb-2 text-amber-400" />
                           <span className="text-xs font-medium text-amber-300">Màn hình đăng nhập</span>
                         </div>
                       )}
                     </>
                   ) : isViewing && conn && screenStatuses[conn.id]?.status === 'login_screen' ? (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                    <div className="absolute inset-0 z-10 flex flex-col items-center justify-center text-white pointer-events-none">
                       <Lock className="w-8 h-8 mb-2 text-amber-400" />
                       <span className="text-xs font-medium text-amber-300">Màn hình đăng nhập</span>
-                      <span className="text-[10px] text-slate-400 mt-1">Dùng Remote Login để đăng nhập</span>
                     </div>
                   ) : isViewing ? (
                     <div className="absolute inset-0 flex flex-col items-center justify-center text-white">

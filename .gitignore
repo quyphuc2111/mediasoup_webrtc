@@ -33,3 +33,5 @@ src-tauri/target/
 # Bundled binaries (generated during build)
 # src-tauri/binaries/*
 # !src-tauri/binaries/.gitkeep
+
+smartlab-service/target
