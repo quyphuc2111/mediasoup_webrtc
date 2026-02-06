@@ -54,9 +54,11 @@
     },
     "windows": {
       "nsis": {
-        "installMode": "currentUser",
+        "installMode": "perMachine",
         "installerIcon": "icons/icon.ico",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "startMenuFolder": "Smartlab Student",
+        "installerHooks": "windows/hooks.nsi"
       }
     }
   },

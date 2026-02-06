@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod audio_capture;
 mod auto_update;
+mod autostart;
 mod crypto;
 mod database;
 mod document_distribution;
@@ -1890,6 +1891,17 @@ pub fn run() {
                     log::error!("[Setup] Failed to setup system tray: {}", e);
                 } else {
                     log::info!("[Setup] System tray initialized successfully");
+                }
+                
+                // Auto-register autostart on first run (like Veyon/NetSupport)
+                if !autostart::is_autostart_configured() {
+                    log::info!("[Setup] Autostart not configured, registering now...");
+                    match autostart::register_autostart() {
+                        Ok(()) => log::info!("[Setup] Autostart registered successfully"),
+                        Err(e) => log::warn!("[Setup] Failed to register autostart: {}", e),
+                    }
+                } else {
+                    log::info!("[Setup] Autostart already configured");
                 }
                 
                 // Start agent status monitor
