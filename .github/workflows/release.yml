@@ -126,10 +126,23 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: ./src-tauri -> target
+          workspaces: |
+            ./src-tauri -> target
+            ./smartlab-service -> target
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Build SmartlabService (Windows Service)
+        run: cargo build --release --target x86_64-pc-windows-msvc
+        working-directory: smartlab-service
+
+      - name: Copy service binary to Tauri binaries
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+          cp smartlab-service/target/x86_64-pc-windows-msvc/release/smartlab-service.exe src-tauri/binaries/smartlab-service.exe
+          echo "✅ smartlab-service.exe copied"
 
       - name: Build frontend
         run: npm run build
