@@ -692,19 +692,19 @@ const LabControl: React.FC<LabControlProps> = () => {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Tên đăng nhập</label>
                   <input type="text" value={remoteLoginUsername} onChange={e => setRemoteLoginUsername(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none text-black focus:ring-2 focus:ring-indigo-500"
                     placeholder="username" autoFocus onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
                   <input type="password" value={remoteLoginPassword} onChange={e => setRemoteLoginPassword(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none text-black focus:ring-2 focus:ring-indigo-500"
                     placeholder="••••••••" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Domain <span className="text-slate-400">(tùy chọn)</span></label>
                   <input type="text" value={remoteLoginDomain} onChange={e => setRemoteLoginDomain(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none text-black focus:ring-2 focus:ring-indigo-500"
                     placeholder="DOMAIN" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
                 </div>
               </div>
@@ -838,19 +838,19 @@ const LabControl: React.FC<LabControlProps> = () => {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Tên đăng nhập</label>
                   <input type="text" value={remoteLoginUsername} onChange={e => setRemoteLoginUsername(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none text-black focus:ring-2 focus:ring-indigo-500"
                     placeholder="username" autoFocus onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Mật khẩu</label>
                   <input type="password" value={remoteLoginPassword} onChange={e => setRemoteLoginPassword(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none text-black focus:ring-2 focus:ring-indigo-500"
                     placeholder="••••••••" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Domain <span className="text-slate-400">(tùy chọn)</span></label>
                   <input type="text" value={remoteLoginDomain} onChange={e => setRemoteLoginDomain(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none text-black focus:ring-2 focus:ring-indigo-500"
                     placeholder="DOMAIN" onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleRemoteLogin(); }} />
                 </div>
               </div>

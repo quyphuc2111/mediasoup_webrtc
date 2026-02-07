@@ -2062,6 +2062,61 @@ fn ensure_smartlab_service_running(app: &AppHandle) {
     } else {
         log::error!("[SmartlabService] Service executable not found");
     }
+
+    // Ensure firewall rule exists for port 3019 (SmartlabService TCP)
+    ensure_service_firewall_rule();
+}
+
+/// Add Windows Firewall inbound rule for SmartlabService port 3019
+#[cfg(windows)]
+fn ensure_service_firewall_rule() {
+    use std::os::windows::process::CommandExt;
+
+    let rule_name = "SmartlabService TCP 3019";
+
+    // Check if rule already exists
+    let check = Command::new("netsh")
+        .args(["advfirewall", "firewall", "show", "rule", &format!("name={}", rule_name)])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000)
+        .output();
+
+    if let Ok(output) = check {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains(rule_name) {
+                log::info!("[SmartlabService] Firewall rule already exists");
+                return;
+            }
+        }
+    }
+
+    // Add inbound rule for TCP port 3019
+    let result = Command::new("netsh")
+        .args([
+            "advfirewall", "firewall", "add", "rule",
+            &format!("name={}", rule_name),
+            "dir=in", "action=allow", "protocol=TCP",
+            "localport=3019", "enable=yes", "profile=any",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000)
+        .output();
+
+    match result {
+        Ok(out) if out.status.success() => {
+            log::info!("[SmartlabService] Firewall rule added for TCP 3019");
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            log::warn!("[SmartlabService] Failed to add firewall rule (may need admin): {}", err);
+        }
+        Err(e) => {
+            log::warn!("[SmartlabService] Failed to run netsh: {}", e);
+        }
+    }
 }
 
 /// Find the smartlab-service.exe in known locations
