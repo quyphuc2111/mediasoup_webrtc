@@ -846,9 +846,13 @@ async fn remote_login_student(
     let addr = format!("{}:3019", ip);
     log::info!("[RemoteLogin] Connecting to service at {}", addr);
 
-    let stream = TcpStream::connect(&addr)
-        .await
-        .map_err(|e| format!("Cannot connect to student service at {}: {}", addr, e))?;
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        TcpStream::connect(&addr),
+    )
+    .await
+    .map_err(|_| format!("Connection to student service at {} timed out (5s)", addr))?
+    .map_err(|e| format!("Cannot connect to student service at {}: {}", addr, e))?;
 
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -889,9 +893,13 @@ async fn ping_student_service(ip: String) -> Result<serde_json::Value, String> {
 
     let addr = format!("{}:3019", ip);
 
-    let stream = TcpStream::connect(&addr)
-        .await
-        .map_err(|e| format!("Service not reachable at {}: {}", addr, e))?;
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        TcpStream::connect(&addr),
+    )
+    .await
+    .map_err(|_| format!("Service not reachable at {} (timed out after 5s)", addr))?
+    .map_err(|e| format!("Service not reachable at {}: {}", addr, e))?;
 
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);

@@ -36,16 +36,37 @@ pub struct Response {
 }
 
 /// Run the TCP command server
+/// Run the TCP command server with retry logic for binding
+/// Run the TCP command server with retry logic for binding
 pub async fn run_command_server(port: u16) {
     let addr = format!("0.0.0.0:{}", port);
 
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(l) => {
-            log::info!("[CmdServer] Listening on {}", addr);
-            l
+    // Retry binding up to 30 times (total ~60s wait) to handle boot race conditions
+    // where the service starts before the network stack is fully ready
+    let max_retries = 30;
+    let mut listener = None;
+
+    for attempt in 1..=max_retries {
+        match TcpListener::bind(&addr).await {
+            Ok(l) => {
+                log::info!("[CmdServer] Listening on {} (attempt {})", addr, attempt);
+                listener = Some(l);
+                break;
+            }
+            Err(e) => {
+                log::warn!(
+                    "[CmdServer] Failed to bind {} (attempt {}/{}): {}",
+                    addr, attempt, max_retries, e
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
         }
-        Err(e) => {
-            log::error!("[CmdServer] Failed to bind {}: {}", addr, e);
+    }
+
+    let listener = match listener {
+        Some(l) => l,
+        None => {
+            log::error!("[CmdServer] Giving up binding to {} after {} attempts", addr, max_retries);
             return;
         }
     };

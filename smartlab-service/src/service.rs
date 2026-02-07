@@ -115,6 +115,8 @@ fn run_service_inner() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Install the service into Windows SCM
 pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
+    use windows_service::service::ServiceDependency;
+
     let manager =
         ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CREATE_SERVICE)?;
 
@@ -128,7 +130,11 @@ pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
         error_control: ServiceErrorControl::Normal,
         executable_path: exe_path,
         launch_arguments: vec![],
-        dependencies: vec![],
+        dependencies: vec![
+            // Wait for network stack to be ready before starting
+            ServiceDependency::Service(OsString::from("Tcpip")),
+            ServiceDependency::Service(OsString::from("Dhcp")),
+        ],
         account_name: None, // LocalSystem
         account_password: None,
     };
