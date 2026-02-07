@@ -1,7 +1,7 @@
 {
   "name": "screensharing-webrtc-mediasoup",
   "private": true,
-  "version": "11.2.7",
+  "version": "11.2.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
