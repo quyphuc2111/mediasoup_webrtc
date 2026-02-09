@@ -27,6 +27,7 @@ interface ScreenFrame {
   height: number;
   is_keyframe: boolean;
   codec: string;
+  transport?: string;
 }
 
 // Remote control input types
@@ -372,6 +373,11 @@ export function StudentFullView({
           <span className="student-ip">{student.ip}:{student.port}</span>
           {screenFrame && (
             <span className="screen-resolution">{screenFrame.width}x{screenFrame.height}</span>
+          )}
+          {screenFrame && (
+            <span className={`protocol-badge ${screenFrame.transport === 'udp' ? 'udp' : 'ws'}`}>
+              {screenFrame.transport === 'udp' ? '⚡ UDP' : '🔗 WebSocket'}
+            </span>
           )}
           {isRemoteControlActive && (
             <div className="remote-control-indicator">

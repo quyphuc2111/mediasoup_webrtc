@@ -54,6 +54,7 @@ interface ScreenFrame {
   height: number;
   is_keyframe: boolean;
   codec: string;
+  transport?: string;
 }
 
 interface MouseInputEvent {
@@ -621,6 +622,15 @@ const LabControl: React.FC<LabControlProps> = () => {
             <h2 className="text-xl font-black text-white">{selectedComputer.computerName}</h2>
             <span className="text-sm text-slate-400 font-mono">{selectedComputer.ipAddress}</span>
             {frame && <span className="text-xs text-slate-500">{frame.width}x{frame.height}</span>}
+            {frame && (
+              <span className={`text-xs font-mono px-2 py-0.5 rounded-full ${
+                frame.transport === 'udp' 
+                  ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' 
+                  : 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
+              }`}>
+                {frame.transport === 'udp' ? '⚡ UDP' : '🔗 WebSocket'}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3">
             {conn && screenStatuses[conn.id]?.status === 'login_screen' && (
@@ -751,6 +761,15 @@ const LabControl: React.FC<LabControlProps> = () => {
             <h2 className="text-lg font-black text-white">{selectedComputer.computerName}</h2>
             <span className="text-sm text-slate-400 font-mono">{selectedComputer.ipAddress}</span>
             {frame && <span className="text-xs text-slate-500">{frame.width}x{frame.height}</span>}
+            {frame && (
+              <span className={`text-xs font-mono px-2 py-0.5 rounded-full ${
+                frame.transport === 'udp' 
+                  ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' 
+                  : 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
+              }`}>
+                {frame.transport === 'udp' ? '⚡ UDP' : '🔗 WebSocket'}
+              </span>
+            )}
             <div className="flex items-center gap-2 px-3 py-1 bg-rose-600 rounded-lg">
               <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
               <span className="text-xs font-black text-white uppercase">Đang điều khiển</span>

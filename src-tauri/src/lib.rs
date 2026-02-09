@@ -24,6 +24,7 @@ mod student_auto_connect;
 mod student_tray;
 mod teacher_connector;
 mod udp_audio;
+mod udp_frame_transport;
 
 use crypto::{KeyPairInfo, VerifyResult};
 use document_distribution::{Document, DocumentServerState};
@@ -1109,6 +1110,19 @@ fn send_remote_keyframe_request(
     state: State<Arc<ConnectorState>>,
 ) -> Result<(), String> {
     teacher_connector::request_keyframe(&state, &connection_id)
+}
+
+/// Get the transport protocol for a connection ("udp" or "websocket")
+#[tauri::command]
+fn get_transport_protocol(
+    connection_id: String,
+    state: State<Arc<ConnectorState>>,
+) -> String {
+    state.transport_protocols
+        .lock()
+        .ok()
+        .and_then(|protos| protos.get(&connection_id).cloned())
+        .unwrap_or_else(|| "websocket".to_string())
 }
 
 /// Send shutdown command to a student
@@ -2372,6 +2386,7 @@ pub fn run() {
             send_remote_mouse_event,
             send_remote_keyboard_event,
             send_remote_keyframe_request,
+            get_transport_protocol,
             // System Control commands
             send_shutdown_command,
             send_restart_command,

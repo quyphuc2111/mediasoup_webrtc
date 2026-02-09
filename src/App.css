@@ -1605,6 +1605,28 @@ h1 {
   margin-left: 0.5rem;
 }
 
+/* Protocol badge */
+.protocol-badge {
+  font-size: 0.7rem;
+  font-family: monospace;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  margin-left: 0.5rem;
+  font-weight: 600;
+}
+
+.protocol-badge.udp {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.protocol-badge.ws {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
 /* Spinner animation */
 .spinner {
   animation: spin 1s linear infinite;

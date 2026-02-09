@@ -174,6 +174,12 @@ pub enum TeacherMessage {
         update_url: String,
         sha256: Option<String>,
     },
+
+    /// Teacher offers a UDP port for frame delivery
+    #[serde(rename = "udp_offer")]
+    UdpOffer {
+        udp_port: u16,
+    },
 }
 
 /// Messages from student to teacher
@@ -253,9 +259,15 @@ pub enum StudentMessage {
     UpdateAcknowledged {
         version: String,
     },
-}
 
-/// Connection state for a single teacher connection
+    /// Student confirms UDP transport is active
+    #[serde(rename = "udp_ready")]
+    UdpReady,
+
+    /// Student reports UDP failed, will use WebSocket
+    #[serde(rename = "udp_fallback")]
+    UdpFallback,
+}/// Connection state for a single teacher connection
 struct TeacherConnection {
     #[allow(dead_code)]
     addr: SocketAddr,
@@ -265,6 +277,8 @@ struct TeacherConnection {
     /// Whether this connection requires an update before full functionality
     /// Requirements: 6.1, 6.2
     update_required: bool,
+    /// UDP target for frame delivery (teacher_ip:udp_port)
+    udp_target: Option<SocketAddr>,
 }
 
 /// State shared across the agent
@@ -277,6 +291,10 @@ pub struct AgentState {
     pub current_version: Mutex<String>,
     /// Stop flag for auto-connect service
     pub auto_connect_stop: Arc<AtomicBool>,
+    /// UDP socket for frame delivery (shared with capture loop)
+    pub udp_socket: Mutex<Option<Arc<std::net::UdpSocket>>>,
+    /// UDP target address (teacher_ip:port)
+    pub udp_target: Mutex<Option<SocketAddr>>,
 }
 
 impl Default for AgentState {
@@ -288,6 +306,8 @@ impl Default for AgentState {
             connections: Mutex::new(HashMap::new()),
             current_version: Mutex::new(env!("CARGO_PKG_VERSION").to_string()),
             auto_connect_stop: Arc::new(AtomicBool::new(false)),
+            udp_socket: Mutex::new(None),
+            udp_target: Mutex::new(None),
         }
     }
 }
@@ -367,12 +387,13 @@ async fn handle_connection(
                 stop_capture: None,
                 keyframe_request_tx: None,
                 update_required: false,
+                udp_target: None,
             },
         );
     }
 
-    // Channel for screen frames
-    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(2);
+    // Channel for screen frames - larger buffer to prevent keyframe drops during heavy input
+    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(8);
 
     // Get student name and version
     let student_name = state
@@ -491,6 +512,16 @@ async fn handle_connection(
             }
         }
         conns.remove(&addr);
+    }
+
+    // Clean up UDP state
+    {
+        let mut udp = state.udp_socket.lock().unwrap();
+        *udp = None;
+    }
+    {
+        let mut target = state.udp_target.lock().unwrap();
+        *target = None;
     }
 
     // Update status based on remaining connections
@@ -862,6 +893,49 @@ where
                 sha256
             );
         }
+
+        TeacherMessage::UdpOffer { udp_port } => {
+            log::info!("[StudentAgent] Received UDP offer: port {} from {}", udp_port, addr);
+
+            // Create UDP target from teacher's IP + offered port
+            let teacher_ip = addr.ip();
+            let udp_target = SocketAddr::new(teacher_ip, udp_port);
+
+            // Try to create UDP socket and test connectivity
+            match std::net::UdpSocket::bind("0.0.0.0:0") {
+                Ok(socket) => {
+                    // Set non-blocking for use in capture thread
+                    socket.set_nonblocking(false).ok();
+
+                    // Store UDP target in connection state
+                    {
+                        let mut conns = state.connections.lock().unwrap();
+                        if let Some(conn) = conns.get_mut(&addr) {
+                            conn.udp_target = Some(udp_target);
+                        }
+                    }
+
+                    // Store the socket in agent state for the capture loop to use
+                    {
+                        let mut udp = state.udp_socket.lock().unwrap();
+                        *udp = Some(Arc::new(socket));
+                    }
+                    {
+                        let mut target = state.udp_target.lock().unwrap();
+                        *target = Some(udp_target);
+                    }
+
+                    let response = StudentMessage::UdpReady;
+                    send_message(write, &response).await?;
+                    log::info!("[StudentAgent] UDP transport ready, target: {}", udp_target);
+                }
+                Err(e) => {
+                    log::warn!("[StudentAgent] Failed to create UDP socket: {}, falling back to WebSocket", e);
+                    let response = StudentMessage::UdpFallback;
+                    send_message(write, &response).await?;
+                }
+            }
+        }
     }
 
     Ok(())
@@ -899,6 +973,7 @@ fn start_screen_capture(
 
     // Clone frame_tx for the capture thread
     let frame_tx_clone = frame_tx.clone();
+    let state_clone = Arc::clone(state);
 
     // Start capture in background thread to avoid Send issues with Monitor handles
     std::thread::spawn(move || {
@@ -960,6 +1035,7 @@ fn start_screen_capture(
         let mut frame_count: u64 = 0;
         let mut consecutive_failures: u32 = 0;
         let mut login_screen_notified = false;
+        let mut need_keyframe_after_drop = false; // Force keyframe after frame drop
 
         while !stop_flag.load(Ordering::Relaxed) {
             let loop_start = std::time::Instant::now();
@@ -970,6 +1046,16 @@ fn start_screen_capture(
                 crate::log_debug(
                     "info",
                     "[ScreenCapture] Forcing keyframe due to teacher request",
+                );
+            }
+
+            // Force keyframe if previous frame was dropped (prevents corruption)
+            if need_keyframe_after_drop {
+                encoder.request_keyframe();
+                need_keyframe_after_drop = false;
+                crate::log_debug(
+                    "info",
+                    "[ScreenCapture] Forcing keyframe after frame drop to prevent corruption",
                 );
             }
 
@@ -1026,8 +1112,44 @@ fn start_screen_capture(
                             // Add Annex-B H.264 data
                             binary_frame.extend_from_slice(&encoded.data);
 
-                            if frame_tx_clone.try_send(binary_frame).is_err() {
-                                // Channel full or closed
+                            // Try UDP first, fall back to WebSocket
+                            let mut sent_via_udp = false;
+                            {
+                                let udp_socket = state_clone.udp_socket.lock().ok()
+                                    .and_then(|s| s.clone());
+                                let udp_target = state_clone.udp_target.lock().ok()
+                                    .and_then(|t| *t);
+
+                                if let (Some(socket), Some(target)) = (udp_socket, udp_target) {
+                                    match crate::udp_frame_transport::send_frame_udp_sync(
+                                        &socket,
+                                        target,
+                                        frame_count as u32,
+                                        &binary_frame,
+                                    ) {
+                                        Ok(()) => {
+                                            sent_via_udp = true;
+                                        }
+                                        Err(e) => {
+                                            crate::log_debug(
+                                                "warn",
+                                                &format!("[ScreenCapture] UDP send failed: {}, falling back to WebSocket", e),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Fallback to WebSocket if UDP not available or failed
+                            if !sent_via_udp {
+                                if frame_tx_clone.try_send(binary_frame).is_err() {
+                                    // Channel full - frame dropped, force next frame to be keyframe
+                                    need_keyframe_after_drop = true;
+                                    crate::log_debug(
+                                        "warn",
+                                        "[ScreenCapture] Frame dropped (channel full), will force keyframe on next frame",
+                                    );
+                                }
                             }
 
                             frame_count += 1;

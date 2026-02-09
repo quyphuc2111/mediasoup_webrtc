@@ -8,10 +8,13 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
+
+use crate::udp_frame_transport;
 
 /// Connection status for a single student
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -142,6 +145,14 @@ pub enum StudentMessage {
     UpdateAcknowledged {
         version: String,
     },
+
+    /// Student confirms UDP transport is active
+    #[serde(rename = "udp_ready")]
+    UdpReady,
+
+    /// Student reports UDP failed, will use WebSocket
+    #[serde(rename = "udp_fallback")]
+    UdpFallback,
 }
 
 /// Mouse button type
@@ -256,6 +267,12 @@ pub enum TeacherMessage {
         update_url: String,
         sha256: Option<String>,
     },
+
+    /// Offer UDP port for frame delivery
+    #[serde(rename = "udp_offer")]
+    UdpOffer {
+        udp_port: u16,
+    },
 }
 
 /// Command to send to a connection handler
@@ -299,6 +316,12 @@ pub struct ScreenFrame {
     pub height: u32,
     pub is_keyframe: bool,
     pub codec: String, // "h264" or "jpeg"
+    #[serde(default = "default_transport")]
+    pub transport: String, // "udp" or "websocket"
+}
+
+fn default_transport() -> String {
+    "websocket".to_string()
 }
 
 /// State for managing all student connections
@@ -318,6 +341,10 @@ pub struct ConnectorState {
     /// Track which students have acknowledged the update notification
     /// Requirements: 14.4
     pub update_acknowledgments: Mutex<HashMap<String, bool>>,
+    /// Track transport protocol per connection ("udp" or "websocket")
+    pub transport_protocols: Mutex<HashMap<String, String>>,
+    /// UDP receiver stop flags per connection
+    pub udp_stop_flags: Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 impl Default for ConnectorState {
@@ -333,6 +360,8 @@ impl Default for ConnectorState {
             lan_update_url: Mutex::new(None),
             update_sha256: Mutex::new(None),
             update_acknowledgments: Mutex::new(HashMap::new()),
+            transport_protocols: Mutex::new(HashMap::new()),
+            udp_stop_flags: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -527,6 +556,15 @@ impl ConnectorState {
         }
         if let Ok(mut senders) = self.command_senders.lock() {
             senders.remove(id);
+        }
+        if let Ok(mut protos) = self.transport_protocols.lock() {
+            protos.remove(id);
+        }
+        // Stop UDP receiver if running
+        if let Ok(mut flags) = self.udp_stop_flags.lock() {
+            if let Some(flag) = flags.remove(id) {
+                flag.store(true, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -782,9 +820,60 @@ async fn handle_connection(
         }
     }
 
+    // --- Start UDP receiver and offer UDP transport ---
+    let udp_stop = Arc::new(AtomicBool::new(false));
+    {
+        if let Ok(mut flags) = state.udp_stop_flags.lock() {
+            flags.insert(id.clone(), Arc::clone(&udp_stop));
+        }
+    }
+    // Default to websocket
+    if let Ok(mut protos) = state.transport_protocols.lock() {
+        protos.insert(id.clone(), "websocket".to_string());
+    }
+
+    let (udp_frame_tx, mut udp_frame_rx) = mpsc::channel::<udp_frame_transport::ReassembledFrame>(16);
+    let udp_port_result = udp_frame_transport::start_udp_receiver(udp_frame_tx, Arc::clone(&udp_stop)).await;
+
+    if let Ok(udp_port) = udp_port_result {
+        log::info!("[TeacherConnector] UDP receiver started on port {}, sending offer to student", udp_port);
+        let offer = TeacherMessage::UdpOffer { udp_port };
+        let offer_json = serde_json::to_string(&offer).unwrap();
+        let _ = write.send(Message::Text(offer_json)).await;
+    } else {
+        log::warn!("[TeacherConnector] Failed to start UDP receiver, using WebSocket only");
+    }
+
     // Message handling loop
     loop {
         tokio::select! {
+            // Handle UDP frames (primary transport)
+            Some(udp_frame) = udp_frame_rx.recv() => {
+                // Mark transport as UDP
+                if let Ok(mut protos) = state.transport_protocols.lock() {
+                    protos.insert(id.clone(), "udp".to_string());
+                }
+
+                let frame = ScreenFrame {
+                    data: None,
+                    data_binary: Some(udp_frame.h264_data),
+                    sps_pps: udp_frame.sps_pps,
+                    timestamp: udp_frame.timestamp,
+                    width: udp_frame.width,
+                    height: udp_frame.height,
+                    is_keyframe: udp_frame.is_keyframe,
+                    codec: "h264".to_string(),
+                    transport: "udp".to_string(),
+                };
+
+                if let Ok(mut frames) = state.screen_frames.lock() {
+                    frames.insert(id.clone(), frame.clone());
+                }
+
+                if let Some(ref app) = app_handle {
+                    let _ = app.emit("screen-frame", (id.clone(), frame));
+                }
+            }
             // Handle incoming messages from student
             msg = read.next() => {
                 match msg {
@@ -837,6 +926,7 @@ async fn handle_connection(
                                 height,
                                 is_keyframe,
                                 codec: "h264".to_string(),
+                                transport: "websocket".to_string(),
                             };
 
                             // Update state
@@ -1052,6 +1142,13 @@ async fn handle_connection(
     }
 
     // Cleanup
+    udp_stop.store(true, Ordering::Relaxed);
+    if let Ok(mut flags) = state.udp_stop_flags.lock() {
+        flags.remove(&id);
+    }
+    if let Ok(mut protos) = state.transport_protocols.lock() {
+        protos.remove(&id);
+    }
     state.update_status(&id, ConnectionStatus::Disconnected);
     log::info!("[TeacherConnector] Connection closed: {}", id);
 
@@ -1103,6 +1200,7 @@ async fn handle_student_message(
                 height,
                 is_keyframe: true, // JPEG frames are always complete
                 codec: "jpeg".to_string(),
+                transport: "websocket".to_string(),
             };
 
             if let Ok(mut frames) = state.screen_frames.lock() {
@@ -1189,6 +1287,18 @@ async fn handle_student_message(
                 version
             );
             state.record_acknowledgment(id, &version);
+        }
+        StudentMessage::UdpReady => {
+            log::info!("[TeacherConnector] Student {} confirmed UDP transport", id);
+            if let Ok(mut protos) = state.transport_protocols.lock() {
+                protos.insert(id.to_string(), "udp".to_string());
+            }
+        }
+        StudentMessage::UdpFallback => {
+            log::info!("[TeacherConnector] Student {} falling back to WebSocket transport", id);
+            if let Ok(mut protos) = state.transport_protocols.lock() {
+                protos.insert(id.to_string(), "websocket".to_string());
+            }
         }
     }
 

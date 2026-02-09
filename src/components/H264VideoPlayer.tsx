@@ -10,6 +10,7 @@ interface ScreenFrame {
   height: number;
   is_keyframe: boolean;
   codec: string;
+  transport?: string;
 }
 
 interface H264VideoPlayerProps {
@@ -115,6 +116,12 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
   const lastStatsTimeRef = useRef(performance.now());
   const currentCodecRef = useRef('avc1.42E01f');
   const currentResolutionRef = useRef({ width: 0, height: 0 });
+
+  // Corruption detection refs
+  const deltaFramesSinceKeyframeRef = useRef(0);
+  const lastKeyframeTimeRef = useRef(performance.now());
+  const KEYFRAME_REQUEST_THRESHOLD = 90; // Request keyframe after 90 delta frames (~1.5s at 60fps)
+  const KEYFRAME_TIMEOUT_MS = 3000; // Request keyframe if none received for 3 seconds
 
   // Initialize decoder
   const initDecoder = useCallback(async (width: number, height: number, description?: Uint8Array) => {
@@ -238,6 +245,9 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
 
           if (connectionId) {
             invoke('send_remote_keyframe_request', { connectionId }).catch(console.error);
+            // Reset corruption tracking
+            deltaFramesSinceKeyframeRef.current = 0;
+            lastKeyframeTimeRef.current = performance.now();
           }
 
           if (errorCountRef.current >= 5) {
@@ -357,6 +367,27 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       // Store keyframes for recovery
       if (frameData.is_keyframe) {
         lastKeyframeRef.current = h264Data;
+        deltaFramesSinceKeyframeRef.current = 0;
+        lastKeyframeTimeRef.current = performance.now();
+      } else {
+        deltaFramesSinceKeyframeRef.current++;
+
+        // Corruption detection: too many delta frames without a keyframe
+        const timeSinceKeyframe = performance.now() - lastKeyframeTimeRef.current;
+        if (
+          deltaFramesSinceKeyframeRef.current >= KEYFRAME_REQUEST_THRESHOLD ||
+          timeSinceKeyframe >= KEYFRAME_TIMEOUT_MS
+        ) {
+          if (connectionId) {
+            console.warn(
+              `[H264Player] Requesting keyframe: ${deltaFramesSinceKeyframeRef.current} delta frames, ${Math.round(timeSinceKeyframe)}ms since last keyframe`
+            );
+            invoke('send_remote_keyframe_request', { connectionId }).catch(console.error);
+            // Reset counter to avoid spamming requests
+            deltaFramesSinceKeyframeRef.current = 0;
+            lastKeyframeTimeRef.current = performance.now();
+          }
+        }
       }
 
       // CRITICAL: Convert Annex-B to AVCC if decoder is using description
@@ -377,6 +408,14 @@ export function H264VideoPlayer({ frame, className, connectionId, onStats }: H26
       });
 
       decoder.decode(chunk);
+
+      // Check decoder queue size - if too large, frames are backing up (possible corruption)
+      if (decoder.decodeQueueSize > 10) {
+        console.warn(`[H264Player] Decoder queue backing up: ${decoder.decodeQueueSize} frames`);
+        if (connectionId) {
+          invoke('send_remote_keyframe_request', { connectionId }).catch(console.error);
+        }
+      }
 
       // Update stats
       frameCountRef.current++;
