@@ -410,39 +410,43 @@ pub fn authenticate_user(conn: &Connection, username: &str, password: &str) -> L
 
     match result {
         Ok((user_id, user_name, password_hash, role, status, created_at)) => {
-            // Verify password
-            match verify(password, &password_hash) {
-                Ok(true) => {
-                    if status != 1 {
-                        return LoginResponse {
-                            success: false,
-                            message: "Tài khoản đã bị khóa".to_string(),
-                            user: None,
-                        };
-                    }
-                    
-                    LoginResponse {
-                        success: true,
-                        message: "Đăng nhập thành công".to_string(),
-                        user: Some(UserAccount {
-                            user_id,
-                            user_name,
-                            role,
-                            status: status == 1,
-                            created_at,
-                        }),
-                    }
+            // Check account status first
+            if status != 1 {
+                return LoginResponse {
+                    success: false,
+                    message: "Tài khoản đã bị khóa".to_string(),
+                    user: None,
+                };
+            }
+
+            // If password_hash is empty, the account has no password — allow login
+            let password_ok = if password_hash.is_empty() {
+                true
+            } else {
+                match verify(password, &password_hash) {
+                    Ok(matched) => matched,
+                    Err(_) => false,
                 }
-                Ok(false) => LoginResponse {
+            };
+
+            if password_ok {
+                LoginResponse {
+                    success: true,
+                    message: "Đăng nhập thành công".to_string(),
+                    user: Some(UserAccount {
+                        user_id,
+                        user_name,
+                        role,
+                        status: status == 1,
+                        created_at,
+                    }),
+                }
+            } else {
+                LoginResponse {
                     success: false,
                     message: "Mật khẩu không đúng".to_string(),
                     user: None,
-                },
-                Err(_) => LoginResponse {
-                    success: false,
-                    message: "Lỗi xác thực".to_string(),
-                    user: None,
-                },
+                }
             }
         }
         Err(_) => LoginResponse {

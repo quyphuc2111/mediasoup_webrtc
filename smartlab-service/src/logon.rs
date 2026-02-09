@@ -30,6 +30,30 @@ fn to_wide(s: &str) -> Vec<u16> {
 /// Combined with the Scheduled Task (ONLOGON), SmartlabStudent
 /// will auto-start once the session is created.
 pub fn logon_user(username: &str, password: &str, domain: Option<&str>) -> Result<(), String> {
+    // When password is empty, Windows policy "Limit local account use of blank passwords
+    // to console logon only" blocks LogonUserW from a service context (ERROR_ACCOUNT_RESTRICTION).
+    // Bypass by going directly to auto-logon registry approach (which IS a console logon).
+    if password.is_empty() {
+        log::info!("[Logon] Blank password for user {}, using auto-logon approach (bypasses policy)", username);
+
+        // First check if user already has a session we can reconnect
+        if let Some(session_id) = find_user_session(username) {
+            log::info!("[Logon] Found existing session {} for {}, reconnecting", session_id, username);
+            let result = std::process::Command::new("tscon")
+                .args([&session_id.to_string(), "/dest:console"])
+                .output();
+            if let Ok(output) = result {
+                if output.status.success() {
+                    log::info!("[Logon] Session {} activated via tscon", session_id);
+                    return Ok(());
+                }
+            }
+        }
+
+        // No existing session — use auto-logon registry to create a console logon
+        return set_autologon_and_trigger(username, password, domain);
+    }
+
     let wide_user = to_wide(username);
     let wide_pass = to_wide(password);
     let wide_domain = domain.map(|d| to_wide(d));
@@ -57,7 +81,7 @@ pub fn logon_user(username: &str, password: &str, domain: Option<&str>) -> Resul
             log::info!("[Logon] LogonUser succeeded for: {}", username);
 
             // Try multiple methods to activate the user's desktop session
-            let activate_result = activate_user_session(username, &token);
+            let activate_result = activate_user_session(username, password, domain, &token);
             
             // Close the token
             if !token.is_invalid() {
@@ -80,7 +104,7 @@ pub fn logon_user(username: &str, password: &str, domain: Option<&str>) -> Resul
 }
 
 /// Activate the user's desktop session after LogonUser
-fn activate_user_session(username: &str, _token: &HANDLE) -> Result<(), String> {
+fn activate_user_session(username: &str, password: &str, domain: Option<&str>, _token: &HANDLE) -> Result<(), String> {
     use std::process::Command;
 
     // Method 1: If user already has a disconnected session, reconnect it
@@ -111,22 +135,43 @@ fn activate_user_session(username: &str, _token: &HANDLE) -> Result<(), String> 
     // This is the same approach used by Veyon, NetSupport, and similar tools
     log::info!("[Logon] No existing session, setting auto-logon for {}", username);
     
-    set_autologon_and_trigger(username)?;
+    set_autologon_and_trigger(username, password, domain)?;
 
     Ok(())
 }
 
 /// Set Windows auto-logon registry keys and trigger logon
-/// This temporarily sets auto-logon credentials, triggers a logon,
-/// then clears the credentials for security
-fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
+/// This sets auto-logon credentials in the Winlogon registry,
+/// triggers a logon, then clears the credentials for security.
+/// Auto-logon is a CONSOLE logon, so it bypasses the blank password policy.
+fn set_autologon_and_trigger(username: &str, password: &str, domain: Option<&str>) -> Result<(), String> {
     use std::process::Command;
 
-    // We don't store the password in registry for security
-    // Instead, we use a different approach: simulate SAS (Secure Attention Sequence)
-    // to dismiss the lock screen, since LogonUser already created the token
-    
-    // Method A: Use "tsdiscon" to cycle the console session
+    // Set auto-logon registry keys under HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon
+    let reg_path = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
+
+    let set_reg = |name: &str, value: &str| -> Result<(), String> {
+        let output = Command::new("reg")
+            .args(["add", reg_path, "/v", name, "/t", "REG_SZ", "/d", value, "/f"])
+            .output()
+            .map_err(|e| format!("Failed to run reg command: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("[Logon] reg add {} failed: {}", name, stderr.trim());
+        }
+        Ok(())
+    };
+
+    log::info!("[Logon] Setting auto-logon registry for user: {}", username);
+    set_reg("AutoAdminLogon", "1")?;
+    set_reg("DefaultUserName", username)?;
+    set_reg("DefaultPassword", password)?;
+    if let Some(d) = domain {
+        set_reg("DefaultDomainName", d)?;
+    }
+
+    // Trigger logoff of current session to allow auto-logon to kick in
+    // First try tsdiscon to cycle the console
     let _ = Command::new("tsdiscon").arg("console").output();
     std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -139,6 +184,7 @@ fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
         if let Ok(output) = result {
             if output.status.success() {
                 log::info!("[Logon] Session activated via tscon (after tsdiscon)");
+                clear_autologon_registry();
                 return Ok(());
             }
         }
@@ -182,8 +228,8 @@ fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
         }
     }
 
-    // Give Windows time to process
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // Give Windows time to process auto-logon
+    std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Final check
     if let Some(session_id) = find_user_session(username) {
@@ -193,8 +239,26 @@ fn set_autologon_and_trigger(username: &str) -> Result<(), String> {
             .output();
     }
 
-    log::info!("[Logon] Login process completed for {}", username);
+    // Clear auto-logon credentials for security
+    clear_autologon_registry();
+
+    log::info!("[Logon] Auto-logon process completed for {}", username);
     Ok(())
+}
+
+/// Clear auto-logon registry keys for security
+fn clear_autologon_registry() {
+    use std::process::Command;
+    let reg_path = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon";
+
+    let _ = Command::new("reg")
+        .args(["add", reg_path, "/v", "AutoAdminLogon", "/t", "REG_SZ", "/d", "0", "/f"])
+        .output();
+    let _ = Command::new("reg")
+        .args(["delete", reg_path, "/v", "DefaultPassword", "/f"])
+        .output();
+
+    log::info!("[Logon] Auto-logon registry cleared");
 }
 
 /// Find a WTS session ID for a given username

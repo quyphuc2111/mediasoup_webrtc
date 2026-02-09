@@ -519,10 +519,9 @@ const App: React.FC = () => {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Nhập mật khẩu"
+                placeholder="Nhập mật khẩu (để trống nếu không có)"
                 className="w-full px-5 py-4 bg-white border-2 border-slate-200 rounded-2xl text-slate-800 font-medium placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none transition-colors"
                 disabled={!dbInitialized || isLoading}
-                required
               />
             </div>
 
