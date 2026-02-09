@@ -25,6 +25,27 @@ pub enum Command {
         password: String,
         domain: Option<String>,
     },
+
+    /// Get VNC server status
+    #[serde(rename = "vnc_status")]
+    VncStatus,
+
+    /// Start VNC server
+    #[serde(rename = "vnc_start")]
+    VncStart {
+        password: Option<String>,
+    },
+
+    /// Stop VNC server
+    #[serde(rename = "vnc_stop")]
+    VncStop,
+
+    /// Install VNC server
+    #[serde(rename = "vnc_install")]
+    VncInstall {
+        installer_path: Option<String>,
+        password: String,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -191,6 +212,77 @@ async fn process_command(cmd: Command) -> Response {
                     message: "Login only supported on Windows".to_string(),
                     data: None,
                 }
+            }
+        }
+
+        Command::VncStatus => {
+            #[cfg(windows)]
+            {
+                let status = crate::vnc::get_vnc_status();
+                Response {
+                    success: true,
+                    message: if status.running { "running" } else if status.installed { "stopped" } else { "not_installed" }.to_string(),
+                    data: Some(serde_json::json!({
+                        "installed": status.installed,
+                        "running": status.running,
+                        "port": status.port,
+                    })),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                Response {
+                    success: false,
+                    message: "VNC only supported on Windows".to_string(),
+                    data: None,
+                }
+            }
+        }
+
+        Command::VncStart { password } => {
+            log::info!("[CmdServer] VNC start request");
+            #[cfg(windows)]
+            {
+                match crate::vnc::start_vnc(password.as_deref()) {
+                    Ok(msg) => Response { success: true, message: msg, data: None },
+                    Err(e) => Response { success: false, message: e, data: None },
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = password;
+                Response { success: false, message: "VNC only supported on Windows".to_string(), data: None }
+            }
+        }
+
+        Command::VncStop => {
+            log::info!("[CmdServer] VNC stop request");
+            #[cfg(windows)]
+            {
+                match crate::vnc::stop_vnc() {
+                    Ok(msg) => Response { success: true, message: msg, data: None },
+                    Err(e) => Response { success: false, message: e, data: None },
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                Response { success: false, message: "VNC only supported on Windows".to_string(), data: None }
+            }
+        }
+
+        Command::VncInstall { installer_path, password } => {
+            log::info!("[CmdServer] VNC install request");
+            #[cfg(windows)]
+            {
+                match crate::vnc::install_vnc(installer_path.as_deref(), &password) {
+                    Ok(msg) => Response { success: true, message: msg, data: None },
+                    Err(e) => Response { success: false, message: e, data: None },
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (installer_path, password);
+                Response { success: false, message: "VNC only supported on Windows".to_string(), data: None }
             }
         }
     }

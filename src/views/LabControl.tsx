@@ -457,6 +457,22 @@ const LabControl: React.FC<LabControlProps> = () => {
     setFileManagerStudent(conn);
   };
 
+  // VNC Remote Control
+  const [vncLoading, setVncLoading] = useState(false);
+
+  const handleVncConnect = async (ip: string) => {
+    setVncLoading(true);
+    try {
+      await invoke('vnc_connect', { ip, password: 'smartlab' });
+    } catch (err: any) {
+      console.error('[VNC] Connection failed:', err);
+      alert(String(err));
+    } finally {
+      setVncLoading(false);
+      setSystemMenuStudent(null);
+    }
+  };
+
   // Close FileManager
   const closeFileManager = () => {
     setFileManagerStudent(null);
@@ -643,6 +659,12 @@ const LabControl: React.FC<LabControlProps> = () => {
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white text-sm font-bold transition-colors">
               <MousePointer className="w-4 h-4" /> Điều khiển
             </button>
+            {selectedComputer && (
+              <button onClick={() => handleVncConnect(selectedComputer.ipAddress)} disabled={vncLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl text-white text-sm font-bold transition-colors disabled:opacity-50">
+                <Monitor className="w-4 h-4" /> {vncLoading ? 'VNC...' : 'VNC'}
+              </button>
+            )}
             <button onClick={closeView} className="p-2 bg-slate-800 hover:bg-rose-600 rounded-xl text-white transition-colors">
               <X className="w-6 h-6" />
             </button>
@@ -786,6 +808,12 @@ const LabControl: React.FC<LabControlProps> = () => {
               className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-white text-sm font-bold transition-colors">
               <Minimize2 className="w-4 h-4" /> Chỉ xem
             </button>
+            {selectedComputer && (
+              <button onClick={() => handleVncConnect(selectedComputer.ipAddress)} disabled={vncLoading}
+                className="flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-xl text-white text-sm font-bold transition-colors disabled:opacity-50">
+                <Monitor className="w-4 h-4" /> {vncLoading ? 'VNC...' : 'VNC'}
+              </button>
+            )}
             <button onClick={closeView} className="p-2 bg-slate-800 hover:bg-rose-600 rounded-xl text-white transition-colors">
               <X className="w-6 h-6" />
             </button>
@@ -1127,6 +1155,15 @@ const LabControl: React.FC<LabControlProps> = () => {
                               >
                                 <Power className="w-4 h-4" />
                                 Tắt máy
+                              </button>
+                              <div className="border-t border-slate-100" />
+                              <button
+                                onClick={() => handleVncConnect(conn.ip)}
+                                disabled={vncLoading}
+                                className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-colors disabled:opacity-50"
+                              >
+                                <Monitor className="w-4 h-4" />
+                                {vncLoading ? 'Đang kết nối VNC...' : 'VNC Remote Desktop'}
                               </button>
                             </div>
                           )}

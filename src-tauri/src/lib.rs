@@ -928,6 +928,165 @@ async fn ping_student_service(ip: String) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("Invalid response: {}", e))
 }
 
+// ============================================================
+// VNC Remote Control Commands
+// ============================================================
+
+/// Send a command to student's smartlab-service and get response
+async fn send_service_command(ip: &str, command_json: &str) -> Result<serde_json::Value, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    let addr = format!("{}:3019", ip);
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        TcpStream::connect(&addr),
+    )
+    .await
+    .map_err(|_| format!("Service not reachable at {}", addr))?
+    .map_err(|e| format!("Connection failed: {}", e))?;
+
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    let mut cmd = command_json.to_string();
+    if !cmd.ends_with('\n') {
+        cmd.push('\n');
+    }
+    writer.write_all(cmd.as_bytes()).await
+        .map_err(|e| format!("Failed to send: {}", e))?;
+
+    let mut response = String::new();
+    reader.read_line(&mut response).await
+        .map_err(|e| format!("Failed to read: {}", e))?;
+
+    serde_json::from_str(response.trim())
+        .map_err(|e| format!("Invalid response: {}", e))
+}
+
+/// Get VNC status on a student machine
+#[tauri::command]
+async fn vnc_get_status(ip: String) -> Result<serde_json::Value, String> {
+    send_service_command(&ip, r#"{"command":"vnc_status"}"#).await
+}
+
+/// Start VNC server on a student machine
+#[tauri::command]
+async fn vnc_start_server(ip: String, password: Option<String>) -> Result<serde_json::Value, String> {
+    let cmd = serde_json::json!({
+        "command": "vnc_start",
+        "password": password,
+    });
+    send_service_command(&ip, &cmd.to_string()).await
+}
+
+/// Stop VNC server on a student machine
+#[tauri::command]
+async fn vnc_stop_server(ip: String) -> Result<serde_json::Value, String> {
+    send_service_command(&ip, r#"{"command":"vnc_stop"}"#).await
+}
+
+/// Install VNC on a student machine
+#[tauri::command]
+async fn vnc_install(ip: String, password: String, installer_path: Option<String>) -> Result<serde_json::Value, String> {
+    let cmd = serde_json::json!({
+        "command": "vnc_install",
+        "password": password,
+        "installer_path": installer_path,
+    });
+    send_service_command(&ip, &cmd.to_string()).await
+}
+
+/// Launch VNC viewer to connect to a student machine
+#[tauri::command]
+async fn vnc_connect(ip: String, password: Option<String>) -> Result<String, String> {
+    // First ensure VNC server is running on student
+    let status = send_service_command(&ip, r#"{"command":"vnc_status"}"#).await?;
+    
+    let is_running = status.get("data")
+        .and_then(|d| d.get("running"))
+        .and_then(|r| r.as_bool())
+        .unwrap_or(false);
+    
+    let is_installed = status.get("data")
+        .and_then(|d| d.get("installed"))
+        .and_then(|i| i.as_bool())
+        .unwrap_or(false);
+
+    if !is_installed {
+        return Err("TightVNC chưa được cài đặt trên máy học sinh. Hãy cài đặt trước.".to_string());
+    }
+
+    if !is_running {
+        // Auto-start VNC server
+        let start_cmd = serde_json::json!({
+            "command": "vnc_start",
+            "password": password,
+        });
+        let start_result = send_service_command(&ip, &start_cmd.to_string()).await?;
+        let success = start_result.get("success").and_then(|s| s.as_bool()).unwrap_or(false);
+        if !success {
+            let msg = start_result.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+            return Err(format!("Không thể khởi động VNC server: {}", msg));
+        }
+        // Wait for server to start
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    // Launch VNC viewer
+    let vnc_addr = format!("{}::5900", ip);
+    let _ = &vnc_addr; // used conditionally per platform
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Try TightVNC viewer first, then UltraVNC, then generic
+        let viewers = [
+            r"C:\Program Files\TightVNC\tvnviewer.exe",
+            r"C:\Program Files (x86)\TightVNC\tvnviewer.exe",
+            r"C:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe",
+        ];
+        
+        for viewer in &viewers {
+            let path = std::path::Path::new(viewer);
+            if path.exists() {
+                let mut cmd = std::process::Command::new(viewer);
+                cmd.arg(&vnc_addr);
+                if let Some(ref pwd) = password {
+                    cmd.args(["-password", pwd]);
+                }
+                match cmd.spawn() {
+                    Ok(_) => return Ok(format!("VNC viewer launched: {}", vnc_addr)),
+                    Err(e) => log::warn!("[VNC] Failed to launch {}: {}", viewer, e),
+                }
+            }
+        }
+        
+        return Err("Không tìm thấy VNC viewer. Hãy cài TightVNC Viewer.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS has built-in VNC viewer via Screen Sharing
+        let vnc_url = format!("vnc://{}", ip);
+        match std::process::Command::new("open").arg(&vnc_url).spawn() {
+            Ok(_) => return Ok(format!("Screen Sharing launched: {}", vnc_url)),
+            Err(e) => return Err(format!("Failed to open VNC: {}", e)),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try common Linux VNC viewers
+        let viewers = ["vncviewer", "remmina", "vinagre", "xtigervncviewer"];
+        for viewer in &viewers {
+            if let Ok(_) = std::process::Command::new(viewer).arg(&vnc_addr).spawn() {
+                return Ok(format!("VNC viewer launched: {}", vnc_addr));
+            }
+        }
+        return Err("Không tìm thấy VNC viewer. Hãy cài vncviewer.".to_string());
+    }
+}
+
 /// Get current agent status
 #[tauri::command]
 fn get_agent_status(state: State<Arc<AgentState>>) -> AgentStatus {
@@ -2384,6 +2543,12 @@ pub fn run() {
             // Auto-Logon commands
             remote_login_student,
             ping_student_service,
+            // VNC commands
+            vnc_get_status,
+            vnc_start_server,
+            vnc_stop_server,
+            vnc_install,
+            vnc_connect,
             // Teacher Connector commands
             connect_to_student,
             disconnect_from_student,

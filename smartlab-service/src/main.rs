@@ -14,6 +14,8 @@ mod service;
 mod commands;
 #[cfg(windows)]
 mod logon;
+#[cfg(windows)]
+mod vnc;
 
 fn main() {
     // Initialize logging
