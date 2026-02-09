@@ -760,6 +760,16 @@ fn start_student_agent(
     agent_state: State<Arc<AgentState>>,
     transfer_state: State<Arc<FileTransferState>>,
 ) -> Result<(), String> {
+    // Stop any existing agent first to prevent duplicates
+    let current_status = agent_state.get_status();
+    if current_status != student_agent::AgentStatus::Stopped {
+        log::info!("[StudentAgent] Stopping existing agent before restart (status: {:?})", current_status);
+        agent_state.auto_connect_stop.store(true, Ordering::Relaxed);
+        let _ = student_agent::stop_agent(&agent_state);
+        // Give tasks time to clean up
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
     // Update config
     {
         let mut config = agent_state.config.lock().map_err(|e| e.to_string())?;

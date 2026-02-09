@@ -847,116 +847,9 @@ async fn handle_connection(
     // Message handling loop
     loop {
         tokio::select! {
-            // Handle UDP frames (primary transport)
-            Some(udp_frame) = udp_frame_rx.recv() => {
-                // Mark transport as UDP
-                if let Ok(mut protos) = state.transport_protocols.lock() {
-                    protos.insert(id.clone(), "udp".to_string());
-                }
+            biased;
 
-                let frame = ScreenFrame {
-                    data: None,
-                    data_binary: Some(udp_frame.h264_data),
-                    sps_pps: udp_frame.sps_pps,
-                    timestamp: udp_frame.timestamp,
-                    width: udp_frame.width,
-                    height: udp_frame.height,
-                    is_keyframe: udp_frame.is_keyframe,
-                    codec: "h264".to_string(),
-                    transport: "udp".to_string(),
-                };
-
-                if let Ok(mut frames) = state.screen_frames.lock() {
-                    frames.insert(id.clone(), frame.clone());
-                }
-
-                if let Some(ref app) = app_handle {
-                    let _ = app.emit("screen-frame", (id.clone(), frame));
-                }
-            }
-            // Handle incoming messages from student
-            msg = read.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        if let Err(e) = handle_student_message(&text, &state, &id, &app_handle).await {
-                            log::error!("[TeacherConnector] Error: {}", e);
-                        }
-                    }
-                    Some(Ok(Message::Binary(data))) => {
-                        // H.264 frame format:
-                        // [1 byte: frame_type]
-                        // [8 bytes: timestamp]
-                        // [4 bytes: width]
-                        // [4 bytes: height]
-                        // [2 bytes: description_length]
-                        // [description_length bytes: AVCC description] (only for keyframes)
-                        // [H.264 Annex-B data]
-                        if data.len() > 19 {
-                            let is_keyframe = data[0] == 1;
-                            let timestamp = u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
-                            let width = u32::from_le_bytes(data[9..13].try_into().unwrap_or([0u8; 4]));
-                            let height = u32::from_le_bytes(data[13..17].try_into().unwrap_or([0u8; 4]));
-                            let desc_len = u16::from_le_bytes(data[17..19].try_into().unwrap_or([0u8; 2])) as usize;
-
-                            let desc_start = 19;
-                            let desc_end = desc_start + desc_len;
-
-                            if desc_end > data.len() {
-                                log::warn!("[TeacherConnector] Invalid frame format: description length exceeds data");
-                                continue;
-                            }
-
-                            // Extract SPS/PPS (AVCC description)
-                            let sps_pps = if desc_len > 0 {
-                                Some(data[desc_start..desc_end].to_vec())
-                            } else {
-                                None
-                            };
-
-                            // Extract H.264 Annex-B data
-                            let h264_data = data[desc_end..].to_vec();
-
-                            // Create the ScreenFrame with raw binary data - NO CPU-HEAVY DECODING HERE
-                            let frame = ScreenFrame {
-                                data: None, // No JPEG base64 string
-                                data_binary: Some(h264_data),
-                                sps_pps,
-                                timestamp,
-                                width,
-                                height,
-                                is_keyframe,
-                                codec: "h264".to_string(),
-                                transport: "websocket".to_string(),
-                            };
-
-                            // Update state
-                            if let Ok(mut frames) = state.screen_frames.lock() {
-                                frames.insert(id.clone(), frame.clone());
-                            }
-
-                            // Emit event to frontend for real-time push
-                            if let Some(ref app) = app_handle {
-                                let _ = app.emit("screen-frame", (id.clone(), frame));
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) => {
-                        log::info!("[TeacherConnector] Connection closed by student");
-                        break;
-                    }
-                    Some(Ok(Message::Ping(data))) => {
-                        let _ = write.send(Message::Pong(data)).await;
-                    }
-                    Some(Err(e)) => {
-                        log::error!("[TeacherConnector] WebSocket error: {}", e);
-                        break;
-                    }
-                    None => break,
-                    _ => {}
-                }
-            }
-
-            // Handle commands from app with batching for mouse move events
+            // Handle commands from app FIRST (input events must not be starved by UDP frames)
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(ConnectionCommand::RequestScreen) => {
@@ -1136,6 +1029,103 @@ async fn handle_connection(
                         let _ = write.close().await;
                         break;
                     }
+                }
+            }
+
+            // Handle UDP frames (lower priority than input commands)
+            Some(udp_frame) = udp_frame_rx.recv() => {
+                // Mark transport as UDP
+                if let Ok(mut protos) = state.transport_protocols.lock() {
+                    protos.insert(id.clone(), "udp".to_string());
+                }
+
+                let frame = ScreenFrame {
+                    data: None,
+                    data_binary: Some(udp_frame.h264_data),
+                    sps_pps: udp_frame.sps_pps,
+                    timestamp: udp_frame.timestamp,
+                    width: udp_frame.width,
+                    height: udp_frame.height,
+                    is_keyframe: udp_frame.is_keyframe,
+                    codec: "h264".to_string(),
+                    transport: "udp".to_string(),
+                };
+
+                if let Ok(mut frames) = state.screen_frames.lock() {
+                    frames.insert(id.clone(), frame.clone());
+                }
+
+                if let Some(ref app) = app_handle {
+                    let _ = app.emit("screen-frame", (id.clone(), frame));
+                }
+            }
+
+            // Handle incoming WebSocket messages from student
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Err(e) = handle_student_message(&text, &state, &id, &app_handle).await {
+                            log::error!("[TeacherConnector] Error: {}", e);
+                        }
+                    }
+                    Some(Ok(Message::Binary(data))) => {
+                        if data.len() > 19 {
+                            let is_keyframe = data[0] == 1;
+                            let timestamp = u64::from_le_bytes(data[1..9].try_into().unwrap_or([0u8; 8]));
+                            let width = u32::from_le_bytes(data[9..13].try_into().unwrap_or([0u8; 4]));
+                            let height = u32::from_le_bytes(data[13..17].try_into().unwrap_or([0u8; 4]));
+                            let desc_len = u16::from_le_bytes(data[17..19].try_into().unwrap_or([0u8; 2])) as usize;
+
+                            let desc_start = 19;
+                            let desc_end = desc_start + desc_len;
+
+                            if desc_end > data.len() {
+                                log::warn!("[TeacherConnector] Invalid frame format: description length exceeds data");
+                                continue;
+                            }
+
+                            let sps_pps = if desc_len > 0 {
+                                Some(data[desc_start..desc_end].to_vec())
+                            } else {
+                                None
+                            };
+
+                            let h264_data = data[desc_end..].to_vec();
+
+                            let frame = ScreenFrame {
+                                data: None,
+                                data_binary: Some(h264_data),
+                                sps_pps,
+                                timestamp,
+                                width,
+                                height,
+                                is_keyframe,
+                                codec: "h264".to_string(),
+                                transport: "websocket".to_string(),
+                            };
+
+                            if let Ok(mut frames) = state.screen_frames.lock() {
+                                frames.insert(id.clone(), frame.clone());
+                            }
+
+                            if let Some(ref app) = app_handle {
+                                let _ = app.emit("screen-frame", (id.clone(), frame));
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        log::info!("[TeacherConnector] Connection closed by student");
+                        break;
+                    }
+                    Some(Ok(Message::Ping(data))) => {
+                        let _ = write.send(Message::Pong(data)).await;
+                    }
+                    Some(Err(e)) => {
+                        log::error!("[TeacherConnector] WebSocket error: {}", e);
+                        break;
+                    }
+                    None => break,
+                    _ => {}
                 }
             }
         }

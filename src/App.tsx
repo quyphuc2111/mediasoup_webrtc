@@ -120,6 +120,16 @@ const App: React.FC = () => {
 
     const startAgent = async () => {
       try {
+        // Check if agent is already running before starting
+        try {
+          const currentStatus = await invoke<string>('get_agent_status');
+          if (currentStatus !== 'Stopped') {
+            console.log('[StudentAgent] Agent already running, skipping auto-start');
+            agentStarted.current = true;
+            return;
+          }
+        } catch (_) { /* ignore */ }
+
         console.log('[StudentAgent] Auto-starting agent for student...');
         setAgentStatus('Starting');
         
