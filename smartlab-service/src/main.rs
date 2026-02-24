@@ -14,6 +14,8 @@ mod service;
 mod commands;
 #[cfg(windows)]
 mod logon;
+#[cfg(windows)]
+mod discovery;
 
 fn main() {
     // Initialize logging
@@ -46,6 +48,10 @@ fn main() {
                 "--console" => {
                     // Run in console mode for debugging
                     log::info!("Running in console mode (not as service)");
+                    // Start discovery responder in background
+                    std::thread::spawn(|| {
+                        discovery::run_discovery_responder();
+                    });
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
                         commands::run_command_server(3019).await;

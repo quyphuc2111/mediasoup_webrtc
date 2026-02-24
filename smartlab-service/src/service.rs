@@ -85,9 +85,15 @@ fn run_service_inner() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("[Service] Running, listening on port {}", LISTEN_PORT);
 
-    // Run the command server
+    // Run the command server + discovery responder
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
+        // Spawn UDP discovery responder in a background thread
+        // so teacher can find this machine even before user login
+        tokio::task::spawn_blocking(|| {
+            crate::discovery::run_discovery_responder();
+        });
+
         tokio::select! {
             _ = crate::commands::run_command_server(LISTEN_PORT) => {
                 log::info!("[Service] Command server exited");
