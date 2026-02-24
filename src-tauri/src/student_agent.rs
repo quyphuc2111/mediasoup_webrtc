@@ -1630,43 +1630,78 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
         *tx = Some(shutdown_tx.clone());
     }
 
-    // Try to bind to the requested port, if that fails, try a random port
-    let socket = match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
-        Ok(s) => s,
-        Err(e) => {
-            println!("[StudentAgent] Failed to create socket: {}", e);
-            return Err(format!("Failed to create socket: {}", e));
+    // Retry binding to the preferred port up to 10 times (~20s total)
+    // This handles post-restart race conditions where the port is still held by a zombie process
+    let max_bind_retries = 10;
+    let mut socket = None;
+
+    for attempt in 1..=max_bind_retries {
+        let s = match Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("[StudentAgent] Failed to create socket: {}", e);
+                return Err(format!("Failed to create socket: {}", e));
+            }
+        };
+
+        if let Err(e) = s.set_reuse_address(true) {
+            println!("[StudentAgent] Failed to set SO_REUSEADDR: {}", e);
+            return Err(format!("Failed to set SO_REUSEADDR: {}", e));
+        }
+
+        if let Err(e) = s.set_nonblocking(true) {
+            println!("[StudentAgent] Failed to set non-blocking: {}", e);
+            return Err(format!("Failed to set non-blocking: {}", e));
+        }
+
+        let addr_str = format!("0.0.0.0:{}", port);
+        let addr: std::net::SocketAddr = addr_str
+            .parse()
+            .map_err(|e| format!("Invalid address: {}", e))?;
+
+        match s.bind(&addr.into()) {
+            Ok(()) => {
+                println!(
+                    "[StudentAgent] Bound to port {} (attempt {})",
+                    port, attempt
+                );
+                socket = Some(s);
+                break;
+            }
+            Err(e) => {
+                println!(
+                    "[StudentAgent] Failed to bind to {} (attempt {}/{}): {}",
+                    addr_str, attempt, max_bind_retries, e
+                );
+                if attempt < max_bind_retries {
+                    // Kill port holder again and retry
+                    kill_port_holder(port);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    let socket = match socket {
+        Some(s) => s,
+        None => {
+            // Last resort: try a random port so the agent at least runs
+            println!(
+                "[StudentAgent] All {} attempts to bind port {} failed, trying random port...",
+                max_bind_retries, port
+            );
+            let s = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
+                .map_err(|e| format!("Failed to create socket: {}", e))?;
+            let _ = s.set_reuse_address(true);
+            let _ = s.set_nonblocking(true);
+            let random_addr: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
+            s.bind(&random_addr.into()).map_err(|e| {
+                println!("[StudentAgent] Failed to bind to random port: {}", e);
+                format!("Failed to bind to random port: {}", e)
+            })?;
+            s
         }
     };
-
-    if let Err(e) = socket.set_reuse_address(true) {
-        println!("[StudentAgent] Failed to set SO_REUSEADDR: {}", e);
-        return Err(format!("Failed to set SO_REUSEADDR: {}", e));
-    }
-
-    if let Err(e) = socket.set_nonblocking(true) {
-        println!("[StudentAgent] Failed to set non-blocking: {}", e);
-        return Err(format!("Failed to set non-blocking: {}", e));
-    }
-
-    let addr_str = format!("0.0.0.0:{}", port);
-    let addr: std::net::SocketAddr = addr_str
-        .parse()
-        .map_err(|e| format!("Invalid address: {}", e))?;
-
-    // Bind logic with fallback
-    if let Err(e) = socket.bind(&addr.into()) {
-        println!(
-            "[StudentAgent] Failed to bind to {}: {}. Trying random port...",
-            addr_str, e
-        );
-        // Try random port
-        let random_addr: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
-        socket.bind(&random_addr.into()).map_err(|e| {
-            println!("[StudentAgent] Failed to bind to random port: {}", e);
-            format!("Failed to bind to random port: {}", e)
-        })?;
-    }
 
     // Get the actual bound port
     let local_addr = socket
@@ -1699,7 +1734,7 @@ pub async fn start_agent(state: Arc<AgentState>) -> Result<(), String> {
 
     println!("[StudentAgent] WebSocket server listening on port {}", port);
 
-    log::info!("[StudentAgent] Listening on: {}", addr);
+    log::info!("[StudentAgent] Listening on 0.0.0.0:{}", port);
     state.set_status(AgentStatus::WaitingForTeacher);
 
     // Accept connections

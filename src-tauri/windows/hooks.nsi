@@ -41,6 +41,12 @@
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService"'
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService" dir=in action=allow program="$INSTDIR\binaries\smartlab-service.exe" enable=yes profile=any'
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService Out" dir=out action=allow program="$INSTDIR\binaries\smartlab-service.exe" enable=yes profile=any'
+  
+  ; Port-based firewall rules (more reliable across restarts than program-based)
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabStudent TCP 3017"'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabStudent TCP 3017" dir=in action=allow protocol=TCP localport=3017 enable=yes profile=any'
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService TCP 3019"'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="SmartlabService TCP 3019" dir=in action=allow protocol=TCP localport=3019 enable=yes profile=any'
   DetailPrint "Added Windows Firewall exceptions"
 
   ; ============================================================
@@ -96,6 +102,8 @@
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME} Out"'
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService"'
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService Out"'
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabStudent TCP 3017"'
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="SmartlabService TCP 3019"'
 
   DetailPrint "${PRODUCTNAME} uninstall cleanup complete"
 !macroend

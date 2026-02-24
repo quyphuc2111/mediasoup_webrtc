@@ -2097,58 +2097,63 @@ fn ensure_smartlab_service_running(app: &AppHandle) {
         log::error!("[SmartlabService] Service executable not found");
     }
 
-    // Ensure firewall rule exists for port 3019 (SmartlabService TCP)
+    // Ensure firewall rules exist for both ports
     ensure_service_firewall_rule();
 }
 
-/// Add Windows Firewall inbound rule for SmartlabService port 3019
+/// Add Windows Firewall inbound rules for SmartlabService (3019) and StudentAgent (3017)
 #[cfg(windows)]
 fn ensure_service_firewall_rule() {
     use std::os::windows::process::CommandExt;
 
-    let rule_name = "SmartlabService TCP 3019";
+    let rules: &[(&str, &str)] = &[
+        ("SmartlabService TCP 3019", "3019"),
+        ("SmartlabStudent TCP 3017", "3017"),
+    ];
 
-    // Check if rule already exists
-    let check = Command::new("netsh")
-        .args(["advfirewall", "firewall", "show", "rule", &format!("name={}", rule_name)])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
-        .output();
+    for (rule_name, port) in rules {
+        // Check if rule already exists
+        let check = Command::new("netsh")
+            .args(["advfirewall", "firewall", "show", "rule", &format!("name={}", rule_name)])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(0x08000000)
+            .output();
 
-    if let Ok(output) = check {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains(rule_name) {
-                log::info!("[SmartlabService] Firewall rule already exists");
-                return;
+        if let Ok(output) = check {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if stdout.contains(rule_name) {
+                    log::info!("[Firewall] Rule '{}' already exists", rule_name);
+                    continue;
+                }
             }
         }
-    }
 
-    // Add inbound rule for TCP port 3019
-    let result = Command::new("netsh")
-        .args([
-            "advfirewall", "firewall", "add", "rule",
-            &format!("name={}", rule_name),
-            "dir=in", "action=allow", "protocol=TCP",
-            "localport=3019", "enable=yes", "profile=any",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(0x08000000)
-        .output();
+        // Add inbound rule
+        let result = Command::new("netsh")
+            .args([
+                "advfirewall", "firewall", "add", "rule",
+                &format!("name={}", rule_name),
+                "dir=in", "action=allow", "protocol=TCP",
+                &format!("localport={}", port), "enable=yes", "profile=any",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .creation_flags(0x08000000)
+            .output();
 
-    match result {
-        Ok(out) if out.status.success() => {
-            log::info!("[SmartlabService] Firewall rule added for TCP 3019");
-        }
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            log::warn!("[SmartlabService] Failed to add firewall rule (may need admin): {}", err);
-        }
-        Err(e) => {
-            log::warn!("[SmartlabService] Failed to run netsh: {}", e);
+        match result {
+            Ok(out) if out.status.success() => {
+                log::info!("[Firewall] Rule added: {} (TCP {})", rule_name, port);
+            }
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr);
+                log::warn!("[Firewall] Failed to add rule '{}' (may need admin): {}", rule_name, err);
+            }
+            Err(e) => {
+                log::warn!("[Firewall] Failed to run netsh for '{}': {}", rule_name, e);
+            }
         }
     }
 }
