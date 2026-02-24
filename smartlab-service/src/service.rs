@@ -115,7 +115,10 @@ fn run_service_inner() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Install the service into Windows SCM
 pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
-    use windows_service::service::ServiceDependency;
+    use windows_service::service::{
+        ServiceAction, ServiceActionType, ServiceDependency, ServiceFailureActions,
+        ServiceFailureResetPeriod,
+    };
 
     let manager =
         ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CREATE_SERVICE)?;
@@ -139,10 +142,39 @@ pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
         account_password: None,
     };
 
-    let service = manager.create_service(&service_info, ServiceAccess::CHANGE_CONFIG)?;
+    let service_access =
+        ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::QUERY_CONFIG;
+    let service = manager.create_service(&service_info, service_access)?;
     service.set_description(SERVICE_DESCRIPTION)?;
 
-    log::info!("[Service] Installed: {}", SERVICE_NAME);
+    // Configure recovery: auto-restart on failure (critical for reliability after reboot)
+    let recovery_actions = vec![
+        ServiceAction {
+            action_type: ServiceActionType::Restart,
+            delay: Duration::from_secs(5),
+        },
+        ServiceAction {
+            action_type: ServiceActionType::Restart,
+            delay: Duration::from_secs(10),
+        },
+        ServiceAction {
+            action_type: ServiceActionType::Restart,
+            delay: Duration::from_secs(30),
+        },
+    ];
+    let failure_actions = ServiceFailureActions {
+        reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86400)),
+        reboot_msg: None,
+        command: None,
+        actions: Some(recovery_actions),
+    };
+    service.update_failure_actions(failure_actions)?;
+    service.set_failure_actions_on_non_crash_failures(true)?;
+
+    log::info!(
+        "[Service] Installed with recovery policy: {}",
+        SERVICE_NAME
+    );
     Ok(())
 }
 

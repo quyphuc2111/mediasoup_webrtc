@@ -62,7 +62,12 @@
 
     ; Start the service immediately
     nsExec::ExecToLog 'sc start SmartlabService'
-    DetailPrint "SmartlabService started"
+    
+    ; Configure recovery: auto-restart on failure (backup for Rust-side config)
+    nsExec::ExecToLog 'sc failure SmartlabService reset= 86400 actions= restart/5000/restart/10000/restart/30000'
+    nsExec::ExecToLog 'sc failureflag SmartlabService 1'
+    
+    DetailPrint "SmartlabService started with recovery policy"
   svc_done:
 
   DetailPrint "${PRODUCTNAME} installation complete"

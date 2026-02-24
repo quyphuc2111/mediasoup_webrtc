@@ -1984,6 +1984,26 @@ fn ensure_smartlab_service_running(app: &AppHandle) {
             } else if stdout.contains("RUNNING") {
                 log::info!("[SmartlabService] Service is already running");
                 return;
+            } else if stdout.contains("START_PENDING") {
+                // Service is starting — wait for it
+                log::info!("[SmartlabService] Service is starting, waiting...");
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                // Re-check after waiting
+                if let Ok(recheck) = Command::new("sc")
+                    .args(["query", "SmartlabService"])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .creation_flags(0x08000000)
+                    .output()
+                {
+                    let recheck_stdout = String::from_utf8_lossy(&recheck.stdout);
+                    if recheck_stdout.contains("RUNNING") {
+                        log::info!("[SmartlabService] Service is now running after wait");
+                        return;
+                    }
+                    log::warn!("[SmartlabService] Service still not running after wait: {}", recheck_stdout.trim());
+                }
+                // Fall through to try starting it
             } else if stdout.contains("STOPPED") || stdout.contains("STOP_PENDING") {
                 // Service is installed but stopped — try to start it
                 log::info!("[SmartlabService] Service is stopped, attempting to start...");
