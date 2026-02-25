@@ -2,6 +2,9 @@
 //!
 //! Listens on a TCP port for JSON commands from the teacher app.
 //! Runs at boot level — available even before user login.
+//!
+//! Design: Retries binding INDEFINITELY with exponential backoff.
+//! Never crashes the service process. Self-recovers on network errors.
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -35,59 +38,90 @@ pub struct Response {
     pub data: Option<serde_json::Value>,
 }
 
-/// Run the TCP command server
-/// Run the TCP command server with retry logic for binding
-/// Run the TCP command server with retry logic for binding
+/// Run the TCP command server with INDEFINITE retry and exponential backoff.
+/// This function never returns under normal operation.
+/// If the listener dies (network reset, etc.), it rebinds automatically.
 pub async fn run_command_server(port: u16) {
     let addr = format!("0.0.0.0:{}", port);
 
-    // Retry binding up to 30 times (total ~60s wait) to handle boot race conditions
-    // where the service starts before the network stack is fully ready
-    let max_retries = 30;
-    let mut listener = None;
+    loop {
+        // Phase 1: Bind with exponential backoff (indefinite retry)
+        let listener = bind_with_backoff(&addr).await;
 
-    for attempt in 1..=max_retries {
-        match TcpListener::bind(&addr).await {
-            Ok(l) => {
-                log::info!("[CmdServer] Listening on {} (attempt {})", addr, attempt);
-                listener = Some(l);
-                break;
+        // Phase 2: Accept connections until listener fails
+        log::info!("[CmdServer] Accepting connections on {}", addr);
+        accept_loop(listener).await;
+
+        // If we get here, the listener died — rebind after a short delay
+        log::warn!("[CmdServer] Listener lost, rebinding in 2s...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+}
+
+/// Bind TCP listener with exponential backoff. Retries FOREVER.
+/// Backoff: 1s, 2s, 4s, 8s, 10s (capped), then 10s forever.
+async fn bind_with_backoff(addr: &str) -> TcpListener {
+    let mut attempt: u32 = 0;
+    let mut delay_secs: u64 = 1;
+    const MAX_DELAY: u64 = 10;
+
+    loop {
+        attempt += 1;
+        match TcpListener::bind(addr).await {
+            Ok(listener) => {
+                log::info!(
+                    "[CmdServer] Bound to {} (attempt {}, waited ~{}s total)",
+                    addr, attempt, delay_secs.saturating_sub(1)
+                );
+                return listener;
             }
             Err(e) => {
                 log::warn!(
-                    "[CmdServer] Failed to bind {} (attempt {}/{}): {}",
-                    addr, attempt, max_retries, e
+                    "[CmdServer] Bind failed {} (attempt {}): {} — retry in {}s",
+                    addr, attempt, e, delay_secs
                 );
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+                delay_secs = (delay_secs * 2).min(MAX_DELAY);
             }
         }
     }
+}
 
-    let listener = match listener {
-        Some(l) => l,
-        None => {
-            log::error!("[CmdServer] Giving up binding to {} after {} attempts", addr, max_retries);
-            return;
-        }
-    };
+/// Accept loop — runs until the listener encounters a fatal error.
+async fn accept_loop(listener: TcpListener) {
+    let mut consecutive_errors: u32 = 0;
 
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
+                consecutive_errors = 0;
                 log::info!("[CmdServer] Connection from {}", peer);
                 tokio::spawn(async move {
-                    handle_connection(stream).await;
+                    if let Err(e) = handle_connection(stream).await {
+                        log::warn!("[CmdServer] Connection handler error: {}", e);
+                    }
                 });
             }
             Err(e) => {
-                log::error!("[CmdServer] Accept error: {}", e);
+                consecutive_errors += 1;
+                log::error!(
+                    "[CmdServer] Accept error (#{} consecutive): {}",
+                    consecutive_errors, e
+                );
+
+                // If too many consecutive errors, the listener is probably dead
+                if consecutive_errors > 50 {
+                    log::error!("[CmdServer] Too many accept errors, rebinding...");
+                    return;
+                }
+
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
     }
 }
 
-async fn handle_connection(stream: tokio::net::TcpStream) {
+async fn handle_connection(stream: tokio::net::TcpStream) -> Result<(), Box<dyn std::error::Error>> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
@@ -113,19 +147,20 @@ async fn handle_connection(stream: tokio::net::TcpStream) {
                     },
                 };
 
-                let mut resp_json = serde_json::to_string(&response).unwrap_or_default();
+                let mut resp_json = serde_json::to_string(&response).unwrap_or_else(|_| {
+                    r#"{"success":false,"message":"serialize error"}"#.to_string()
+                });
                 resp_json.push('\n');
 
-                if writer.write_all(resp_json.as_bytes()).await.is_err() {
-                    break;
-                }
+                writer.write_all(resp_json.as_bytes()).await?;
             }
             Err(e) => {
-                log::error!("[CmdServer] Read error: {}", e);
+                log::warn!("[CmdServer] Read error: {}", e);
                 break;
             }
         }
     }
+    Ok(())
 }
 
 async fn process_command(cmd: Command) -> Response {
@@ -137,6 +172,7 @@ async fn process_command(cmd: Command) -> Response {
         },
 
         Command::Status => {
+            // NOTE: get_logged_in_user() only called ON-DEMAND, not at startup
             let logged_in_user = get_logged_in_user();
             let machine_name = std::env::var("COMPUTERNAME").unwrap_or_default();
 
@@ -163,6 +199,7 @@ async fn process_command(cmd: Command) -> Response {
 
             #[cfg(windows)]
             {
+                // NOTE: logon.rs only called ON-DEMAND when teacher sends login command
                 match crate::logon::logon_user(&username, &password, domain.as_deref()) {
                     Ok(()) => {
                         log::info!("[CmdServer] Login successful for: {}", username);
@@ -197,19 +234,26 @@ async fn process_command(cmd: Command) -> Response {
 }
 
 /// Get the currently logged-in user (if any)
+/// Called ON-DEMAND only — never during service startup.
 fn get_logged_in_user() -> Option<String> {
     #[cfg(windows)]
     {
         // Try environment variable first
         if let Ok(user) = std::env::var("USERNAME") {
-            // SYSTEM means no interactive user
             if user != "SYSTEM" && user != "SYSTEM$" {
                 return Some(user);
             }
         }
 
         // Use WTSEnumerateSessions to check for active sessions
-        crate::logon::get_active_session_user()
+        // Wrapped in catch_unwind to prevent panics from killing the service
+        match std::panic::catch_unwind(|| crate::logon::get_active_session_user()) {
+            Ok(result) => result,
+            Err(e) => {
+                log::error!("[CmdServer] Panic in get_active_session_user: {:?}", e);
+                None
+            }
+        }
     }
 
     #[cfg(not(windows))]
