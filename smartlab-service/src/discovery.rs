@@ -11,6 +11,32 @@ use std::time::Duration;
 
 const DISCOVERY_PORT: u16 = 3018;
 
+/// Wait until at least one non-loopback IPv4 address is available.
+/// Retries indefinitely — needed at boot before DHCP assigns an IP.
+fn wait_for_network() {
+    use std::net::IpAddr;
+    let mut attempt = 0u32;
+    loop {
+        let has_ip = if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .iter()
+            .any(|iface| {
+                !iface.is_loopback()
+                    && matches!(iface.ip(), IpAddr::V4(_))
+            });
+
+        if has_ip {
+            log::info!("[ServiceDiscovery] Network ready (attempt {})", attempt + 1);
+            return;
+        }
+
+        attempt += 1;
+        let delay = (attempt * 2).min(10) as u64;
+        log::info!("[ServiceDiscovery] Waiting for network IP... (attempt {}, retry in {}s)", attempt, delay);
+        std::thread::sleep(Duration::from_secs(delay));
+    }
+}
+
 /// Run the discovery responder (blocking — call from a spawned thread).
 /// This function retries FOREVER. It never returns under normal operation.
 /// If the socket dies, it rebinds automatically.
@@ -22,6 +48,9 @@ pub fn run_discovery_responder() {
         "[ServiceDiscovery] Starting discovery responder as '{}' on UDP {}",
         machine_name, DISCOVERY_PORT
     );
+
+    // Wait for a real IP before binding — at boot DHCP may not be done yet
+    wait_for_network();
 
     loop {
         // Phase 1: Bind with exponential backoff (indefinite retry)

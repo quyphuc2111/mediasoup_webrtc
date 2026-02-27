@@ -159,9 +159,10 @@ pub fn install_service() -> Result<(), Box<dyn std::error::Error>> {
         executable_path: exe_path,
         launch_arguments: vec![],
         dependencies: vec![
-            // Wait for network stack to be ready before starting
+            // Wait for network stack and IP assignment to be ready
             ServiceDependency::Service(OsString::from("Tcpip")),
             ServiceDependency::Service(OsString::from("Dhcp")),
+            ServiceDependency::Service(OsString::from("Nsi")), // Network Store Interface - ensures NIC has IP
         ],
         account_name: None, // LocalSystem
         account_password: None,
